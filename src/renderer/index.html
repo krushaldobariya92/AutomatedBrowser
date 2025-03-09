@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>AutomatedBrowser</title>
+    <style>
+      body { margin: 0; font-family: Arial; }
+      .container { display: flex; }
+      .tabs { width: 200px; background: #f0f0f0; height: 100vh; overflow-y: auto; }
+      .tab { padding: 10px; border-bottom: 1px solid #ddd; cursor: pointer; }
+      .tab.active { background: #1E3A8A; color: white; }
+      .new-tab-btn { padding: 10px; background: #10B981; color: white; border: none; cursor: pointer; text-align: center; }
+      .content { flex: 1; height: 100vh; }
+      .url-bar-container { display: flex; align-items: center; }
+      .url-bar { flex: 1; padding: 10px; border: none; }
+      .zak-sidebar { width: 300px; background: #fff; height: 100vh; border-left: 1px solid #ddd; display: flex; flex-direction: column; }
+      .zak-messages { flex: 1; padding: 10px; overflow-y: auto; }
+      .zak-input-container { display: flex; padding: 10px; border-top: 1px solid #ddd; }
+      .zak-input { flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+      .zak-send-btn { padding: 8px 15px; background: #1E3A8A; color: white; border: none; border-radius: 4px; margin-left: 5px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="tabs" id="tabs">
+        <button class="new-tab-btn" id="newTabBtn">+ New Tab</button>
+      </div>
+      <div class="content">
+        <div class="url-bar-container">
+          <input type="text" class="url-bar" id="urlBar" placeholder="Enter URL">
+        </div>
+        <webview id="webview" src="https://duckduckgo.com" style="width: 100%; height: calc(100% - 40px);" 
+          nodeintegration 
+          webpreferences="contextIsolation=false"
+          allowpopups
+          preload="./preload.js"
+          partition="persist:main"></webview>
+      </div>
+      <div class="zak-sidebar">
+        <div class="zak-messages" id="zakMessages">
+          <div>Zak: Waiting for your command...</div>
+        </div>
+        <div class="zak-input-container">
+          <input type="text" class="zak-input" id="zakInput" placeholder="Type your message to Zak...">
+          <button class="zak-send-btn" id="zakSendBtn">Send</button>
+        </div>
+      </div>
+    </div>
+    <script src="tabs-ui.js"></script>
+    <script src="zak-ui.js"></script>
+    <script>
+      // Add event listeners for webview navigation
+      document.addEventListener('DOMContentLoaded', () => {
+        const webview = document.getElementById('webview');
+        const urlBar = document.getElementById('urlBar');
+        const zakMessages = document.getElementById('zakMessages');
+        
+        // Function to update Zak's messages
+        function updateZakMessage(message) {
+          if (zakMessages) {
+            const messageElement = document.createElement('div');
+            messageElement.textContent = `Zak: ${message}`;
+            zakMessages.appendChild(messageElement);
+            // Scroll to the bottom to show the latest message
+            zakMessages.scrollTop = zakMessages.scrollHeight;
+          }
+        }
+        
+        if (webview) {
+          // Listen for messages from the preload script
+          webview.addEventListener('ipc-message', (event) => {
+            console.log('IPC message received:', event.channel, event.args[0]);
+            
+            if (event.channel === 'page-loaded') {
+              const { title, url } = event.args[0];
+              
+              // Update URL bar
+              if (urlBar) urlBar.value = url;
+              
+              // Update active tab
+              if (window.tabs) {
+                const activeTabIndex = window.tabs.findIndex(t => t.active);
+                if (activeTabIndex !== -1) {
+                  window.tabs[activeTabIndex].url = url;
+                  window.tabs[activeTabIndex].title = title || url;
+                  if (typeof window.renderTabs === 'function') {
+                    window.renderTabs();
+                  }
+                }
+              }
+              
+              // Update Zak message
+              updateZakMessage('Page loaded successfully!');
+            }
+            
+            // Handle search submissions
+            if (event.channel === 'search-submitted') {
+              const { query, url } = event.args[0];
+              console.log('Search submitted:', query, url);
+              
+              // Update URL bar
+              if (urlBar) urlBar.value = url;
+              
+              // Update Zak message
+              updateZakMessage(`Searching for "${query}"...`);
+              
+              // Allow the navigation to proceed
+              // The form will submit normally in the webview
+            }
+            
+            // Handle link clicks
+            if (event.channel === 'link-clicked') {
+              const { url } = event.args[0];
+              console.log('Link clicked:', url);
+              
+              // Update URL bar
+              if (urlBar) urlBar.value = url;
+              
+              // Update Zak message
+              updateZakMessage(`Navigating to ${url}...`);
+              
+              // Allow the navigation to proceed
+              // The link will be followed normally in the webview
+            }
+          });
+          
+          // Update URL bar when navigation happens within webview
+          webview.addEventListener('did-navigate', (e) => {
+            console.log('Webview navigated to:', e.url);
+            urlBar.value = e.url;
+            
+            // Update active tab URL
+            if (window.tabs) {
+              window.tabs = window.tabs.map(t => (t.active ? { ...t, url: e.url } : t));
+              if (typeof window.renderTabs === 'function') {
+                window.renderTabs();
+              }
+            }
+            
+            // Update Zak message
+            updateZakMessage('Loading page...');
+          });
+          
+          // Handle navigation within the page (like form submissions)
+          webview.addEventListener('will-navigate', (e) => {
+            console.log('Webview will navigate to:', e.url);
+            // Update URL bar
+            urlBar.value = e.url;
+            // Allow the navigation to proceed
+          });
+          
+          // Handle redirects
+          webview.addEventListener('did-redirect-navigation', (e) => {
+            console.log('Webview redirected to:', e.url);
+            urlBar.value = e.url;
+            
+            // Update active tab URL
+            if (window.tabs) {
+              window.tabs = window.tabs.map(t => (t.active ? { ...t, url: e.url } : t));
+              if (typeof window.renderTabs === 'function') {
+                window.renderTabs();
+              }
+            }
+            
+            // Update Zak message
+            updateZakMessage(`Redirected to ${e.url}...`);
+          });
+          
+          // Handle page load finished
+          webview.addEventListener('did-finish-load', () => {
+            console.log('Webview finished loading');
+            // Update Zak message
+            updateZakMessage('Page loaded successfully!');
+          });
+        }
+      });
+    </script>
+  </body>
+</html>

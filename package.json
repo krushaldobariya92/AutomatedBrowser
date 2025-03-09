@@ -1,0 +1,23 @@
+{
+  "name": "automatedbrowser",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "electron .",
+    "dev": "electron . --debug"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "electron": "^34.2.0"
+  },
+  "dependencies": {
+    "@cliqz/adblocker-electron": "^1.34.0",
+    "electron-squirrel-startup": "^1.0.1",
+    "fetch": "^1.1.0",
+    "node-fetch": "^2.7.0"
+  }
+}
