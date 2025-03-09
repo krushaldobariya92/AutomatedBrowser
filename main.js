@@ -2,9 +2,23 @@ const { app, BrowserWindow, session, Menu, ipcMain } = require('electron');
 const { ElectronBlocker } = require('@cliqz/adblocker-electron');
 const fetch = require('node-fetch');
 const path = require('path');
+const fs = require('fs');
 
 // Import our modules
-const workflows = require('./src/main/workflows');
+console.log('Checking for workflows.js file...');
+const workflowsPath = path.join(__dirname, 'src', 'main', 'workflows.js');
+if (fs.existsSync(workflowsPath)) {
+  console.log('Workflows module found at:', workflowsPath);
+} else {
+  console.error('Workflows module not found at:', workflowsPath);
+}
+
+try {
+  const workflows = require('./src/main/workflows');
+  console.log('Workflows module imported successfully');
+} catch (error) {
+  console.error('Error importing workflows module:', error);
+}
 
 // Enable webview support
 app.commandLine.appendSwitch('enable-features', 'WebViewTag');
@@ -13,6 +27,229 @@ app.commandLine.appendSwitch('enable-features', 'WebViewTag');
 if (require('electron-squirrel-startup')) {
   app.quit();
 }
+
+// Initialize workflows directly to avoid module loading issues
+const workflows = {
+  initialize: () => {
+    console.log('Initializing workflows directly');
+    
+    // Path to store workflows
+    const workflowsDir = path.join(__dirname, 'data');
+    console.log('Workflows directory:', workflowsDir);
+    
+    // Ensure data directory exists
+    if (!fs.existsSync(workflowsDir)) {
+      console.log('Creating workflow directory');
+      fs.mkdirSync(workflowsDir, { recursive: true });
+    }
+    
+    let isRecording = false;
+    let currentWorkflow = [];
+    let workflowName = '';
+    let activeWorkflows = {};
+    
+    // Set up IPC handlers
+    ipcMain.handle('workflow:startRecording', (event, name) => {
+      console.log('IPC: Start recording workflow', name);
+      if (isRecording) {
+        return { success: false, message: 'Already recording a workflow' };
+      }
+      
+      workflowName = name || `Workflow_${Date.now()}`;
+      currentWorkflow = [];
+      isRecording = true;
+      
+      return { success: true, message: `Started recording workflow: ${workflowName}` };
+    });
+    
+    ipcMain.handle('workflow:stopRecording', () => {
+      console.log('IPC: Stop recording workflow');
+      if (!isRecording) {
+        return { success: false, message: 'No active recording' };
+      }
+      
+      isRecording = false;
+      
+      // Don't save empty workflows
+      if (currentWorkflow.length === 0) {
+        return { success: false, message: 'Workflow is empty, nothing to save' };
+      }
+      
+      // Save the workflow
+      const workflowsFile = path.join(workflowsDir, 'workflows.json');
+      let workflows = {};
+      
+      try {
+        if (fs.existsSync(workflowsFile)) {
+          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
+        }
+      } catch (error) {
+        console.error('Error loading workflows:', error);
+      }
+      
+      workflows[workflowName] = {
+        id: Math.random().toString(36).substr(2, 9),
+        name: workflowName,
+        steps: currentWorkflow,
+        createdAt: Date.now(),
+        lastRun: null
+      };
+      
+      try {
+        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
+        console.log('Saved workflow:', workflowName);
+      } catch (error) {
+        console.error('Error saving workflow:', error);
+        return { success: false, message: `Error saving workflow: ${error.message}` };
+      }
+      
+      return { 
+        success: true, 
+        message: `Saved workflow: ${workflowName}`,
+        workflow: workflows[workflowName]
+      };
+    });
+    
+    ipcMain.handle('workflow:recordStep', (event, step) => {
+      console.log('IPC: Record step', step.type);
+      if (!isRecording) {
+        return { success: false, message: 'Not currently recording' };
+      }
+      
+      // Add timestamp to the step
+      step.timestamp = Date.now();
+      currentWorkflow.push(step);
+      
+      return { 
+        success: true, 
+        message: 'Step recorded',
+        step
+      };
+    });
+    
+    ipcMain.handle('workflow:getWorkflows', () => {
+      console.log('IPC: Get workflows');
+      const workflowsFile = path.join(workflowsDir, 'workflows.json');
+      
+      try {
+        if (fs.existsSync(workflowsFile)) {
+          return JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
+        }
+      } catch (error) {
+        console.error('Error loading workflows:', error);
+      }
+      
+      return {};
+    });
+    
+    ipcMain.handle('workflow:runWorkflow', (event, name) => {
+      console.log('IPC: Run workflow', name);
+      const workflowsFile = path.join(workflowsDir, 'workflows.json');
+      let workflows = {};
+      
+      try {
+        if (fs.existsSync(workflowsFile)) {
+          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
+        }
+      } catch (error) {
+        console.error('Error loading workflows:', error);
+        return { success: false, message: 'Error loading workflows' };
+      }
+      
+      if (!workflows[name]) {
+        return { success: false, message: `Workflow not found: ${name}` };
+      }
+      
+      const workflow = workflows[name];
+      const workflowId = workflow.id;
+      
+      // Don't run the same workflow multiple times
+      if (activeWorkflows[workflowId]) {
+        return { success: false, message: `Workflow is already running: ${name}` };
+      }
+      
+      activeWorkflows[workflowId] = {
+        id: workflowId,
+        name,
+        currentStep: 0,
+        steps: workflow.steps,
+        startedAt: Date.now()
+      };
+      
+      // Update last run timestamp
+      workflows[name].lastRun = Date.now();
+      try {
+        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
+      } catch (error) {
+        console.error('Error updating workflow last run time:', error);
+      }
+      
+      return { 
+        success: true, 
+        message: `Started workflow: ${name}`,
+        workflowId
+      };
+    });
+    
+    ipcMain.handle('workflow:getNextStep', (event, workflowId) => {
+      console.log('IPC: Get next step for workflow', workflowId);
+      if (!activeWorkflows[workflowId]) {
+        return { success: false, message: 'Workflow not found or not running' };
+      }
+      
+      const workflow = activeWorkflows[workflowId];
+      
+      if (workflow.currentStep >= workflow.steps.length) {
+        // Workflow is complete
+        delete activeWorkflows[workflowId];
+        return { success: true, complete: true, message: 'Workflow complete' };
+      }
+      
+      const step = workflow.steps[workflow.currentStep];
+      workflow.currentStep++;
+      
+      return { 
+        success: true, 
+        complete: false,
+        step,
+        currentStep: workflow.currentStep,
+        totalSteps: workflow.steps.length
+      };
+    });
+    
+    ipcMain.handle('workflow:deleteWorkflow', (event, name) => {
+      console.log('IPC: Delete workflow', name);
+      const workflowsFile = path.join(workflowsDir, 'workflows.json');
+      let workflows = {};
+      
+      try {
+        if (fs.existsSync(workflowsFile)) {
+          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
+        }
+      } catch (error) {
+        console.error('Error loading workflows:', error);
+        return { success: false, message: 'Error loading workflows' };
+      }
+      
+      if (!workflows[name]) {
+        return { success: false, message: `Workflow not found: ${name}` };
+      }
+      
+      delete workflows[name];
+      
+      try {
+        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
+      } catch (error) {
+        console.error('Error saving workflows after delete:', error);
+        return { success: false, message: `Error deleting workflow: ${error.message}` };
+      }
+      
+      return { success: true, message: `Deleted workflow: ${name}` };
+    });
+    
+    console.log('Workflow system initialized');
+  }
+};
 
 app.on('ready', async () => {
   const win = new BrowserWindow({
@@ -29,6 +266,7 @@ app.on('ready', async () => {
   });
 
   // Initialize our modules
+  console.log('Initializing workflows module...');
   workflows.initialize();
 
   // Ad-blocker - but configure it to not block navigation
@@ -94,31 +332,48 @@ app.on('ready', async () => {
         {
           label: 'Manage Workflows',
           click: () => {
-            win.webContents.executeJavaScript('window.workflows.show()');
+            console.log('Menu: Manage Workflows clicked');
+            win.webContents.executeJavaScript('if (window.workflows) window.workflows.show(); else console.error("Workflows object not found");');
           }
         },
         {
           label: 'Start Recording',
           click: async () => {
+            console.log('Menu: Start Recording clicked');
             const workflowName = `Workflow_${Date.now()}`;
-            const result = await workflows.startRecording(workflowName);
-            if (result.success) {
+            
+            try {
+              const result = await ipcMain.emit('workflow:startRecording', null, workflowName);
+              console.log('Start recording result:', result);
               win.webContents.executeJavaScript(`
-                document.getElementById('workflow-status').textContent = 'Recording "${workflowName}"...';
-                window.workflows.show();
+                if (window.workflows) {
+                  document.getElementById('workflow-status').textContent = 'Recording "${workflowName}"...';
+                  window.workflows.show();
+                } else {
+                  console.error("Workflows object not found");
+                }
               `);
+            } catch (error) {
+              console.error('Error starting recording from menu:', error);
             }
           }
         },
         {
           label: 'Stop Recording',
           click: async () => {
-            const result = await workflows.stopRecording();
-            if (result.success) {
+            console.log('Menu: Stop Recording clicked');
+            try {
+              const result = await ipcMain.emit('workflow:stopRecording');
+              console.log('Stop recording result:', result);
               win.webContents.executeJavaScript(`
-                document.getElementById('workflow-status').textContent = 'Saved workflow: ${result.workflow.name}';
-                window.workflows.loadWorkflows();
+                if (window.workflows) {
+                  window.workflows.loadWorkflows();
+                } else {
+                  console.error("Workflows object not found");
+                }
               `);
+            } catch (error) {
+              console.error('Error stopping recording from menu:', error);
             }
           }
         }
@@ -158,6 +413,12 @@ app.on('ready', async () => {
               </html>
             `);
           }
+        },
+        {
+          label: 'Toggle Developer Tools',
+          click: () => {
+            win.webContents.toggleDevTools();
+          }
         }
       ]
     }
@@ -170,9 +431,7 @@ app.on('ready', async () => {
   win.loadFile(path.join(__dirname, 'src/renderer/index.html'));
   
   // Open DevTools in development
-  if (process.env.NODE_ENV !== 'production') {
-    win.webContents.openDevTools();
-  }
+  win.webContents.openDevTools();
   
   // Log any errors
   win.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
