@@ -3,7 +3,26 @@
  * Handles the UI for form templates management
  */
 
-const { ipcRenderer } = window.electron;
+// Check if window.electron exists before trying to use it
+let formTemplatesIpcRenderer;
+if (typeof window !== 'undefined' && window.electron) {
+  formTemplatesIpcRenderer = window.electron.ipcRenderer;
+} else {
+  // Create a mock ipcRenderer for development/testing
+  console.warn('window.electron not found, using mock ipcRenderer');
+  formTemplatesIpcRenderer = {
+    invoke: (channel, ...args) => {
+      console.log(`Mock ipcRenderer.invoke called: ${channel}`, args);
+      return Promise.resolve({});
+    },
+    on: (channel, listener) => {
+      console.log(`Mock ipcRenderer.on called: ${channel}`);
+    },
+    send: (channel, ...args) => {
+      console.log(`Mock ipcRenderer.send called: ${channel}`, args);
+    }
+  };
+}
 
 // Form Templates Presenter
 class FormTemplatesPresenter {
@@ -159,7 +178,7 @@ class FormTemplatesPresenter {
     console.log('Loading form templates');
     
     try {
-      this.templates = await ipcRenderer.invoke('formTemplate:getAll');
+      this.templates = await formTemplatesIpcRenderer.invoke('formTemplate:getAll');
       console.log('Loaded templates:', Object.keys(this.templates).length);
       
       // Clear template list
@@ -370,10 +389,10 @@ class FormTemplatesPresenter {
       
       if (this.selectedTemplate && this.templates[name]) {
         // Update existing template
-        result = await ipcRenderer.invoke('formTemplate:update', { name, fields });
+        result = await formTemplatesIpcRenderer.invoke('formTemplate:update', { name, fields });
       } else {
         // Create new template
-        result = await ipcRenderer.invoke('formTemplate:save', { name, fields });
+        result = await formTemplatesIpcRenderer.invoke('formTemplate:save', { name, fields });
       }
       
       if (result.success) {
@@ -398,7 +417,7 @@ class FormTemplatesPresenter {
     
     if (confirm(`Are you sure you want to delete the template "${name}"?`)) {
       try {
-        const result = await ipcRenderer.invoke('formTemplate:delete', name);
+        const result = await formTemplatesIpcRenderer.invoke('formTemplate:delete', name);
         
         if (result.success) {
           this.updateStatus(result.message);
@@ -443,7 +462,7 @@ class FormTemplatesPresenter {
     const currentUrl = await getCurrentUrl();
     
     try {
-      const result = await ipcRenderer.invoke('formTemplate:apply', { name, url: currentUrl });
+      const result = await formTemplatesIpcRenderer.invoke('formTemplate:apply', { name, url: currentUrl });
       
       if (result.success) {
         this.updateStatus(result.message);

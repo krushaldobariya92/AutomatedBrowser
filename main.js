@@ -5,6 +5,132 @@ const path = require('path');
 const fs = require('fs');
 const url = require('url');
 
+// Global reference to the main window
+let win;
+
+// Create main window
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    webPreferences: { 
+      nodeIntegration: true, 
+      contextIsolation: false,
+      webviewTag: true, // Enable webview tag
+      webSecurity: false, // Disable web security for development
+      allowRunningInsecureContent: true, // Allow running insecure content
+      enableRemoteModule: true // Enable remote module for webview
+    }
+  });
+  
+  // Load the renderer
+  win.loadFile(path.join(__dirname, 'src/renderer/index.html'));
+  
+  // Open DevTools in development
+  win.webContents.openDevTools();
+}
+
+// Create application menu
+function createMenu() {
+  const template = [
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New Tab',
+          accelerator: 'CmdOrCtrl+T',
+          click: () => {
+            win.webContents.send('new-tab');
+          }
+        },
+        {
+          label: 'Close Tab',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => {
+            win.webContents.send('close-tab');
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Exit',
+          accelerator: 'CmdOrCtrl+Q',
+          click: () => {
+            app.quit();
+          }
+        }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Reload',
+          accelerator: 'CmdOrCtrl+R',
+          click: () => {
+            win.webContents.send('reload-tab');
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Toggle Developer Tools',
+          accelerator: 'CmdOrCtrl+Shift+I',
+          click: () => {
+            win.webContents.toggleDevTools();
+          }
+        }
+      ]
+    },
+    {
+      label: 'Automation',
+      submenu: [
+        {
+          label: 'Workflow Manager',
+          click: () => {
+            win.webContents.send('show-workflow-panel');
+          }
+        },
+        {
+          label: 'Form Templates',
+          click: () => {
+            win.webContents.send('show-template-panel');
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Start Recording',
+          click: () => {
+            win.webContents.send('start-recording');
+          }
+        },
+        {
+          label: 'Stop Recording',
+          click: () => {
+            win.webContents.send('stop-recording');
+          }
+        }
+      ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'About',
+          click: () => {
+            dialog.showMessageBox(win, {
+              title: 'About Automated Browser',
+              message: 'Automated Browser with Zak Assistant',
+              detail: 'Version 1.0.0\nAn Electron-based autonomous web browser with integrated AI assistant and workflow automation.'
+            });
+          }
+        }
+      ]
+    }
+  ];
+  
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
 // Import our modules
 console.log('Checking for workflows.js file...');
 const workflowsPath = path.join(__dirname, 'src', 'main', 'workflows.js');
@@ -497,25 +623,17 @@ const workflows = {
   }
 };
 
-app.on('ready', async () => {
-  const win = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    webPreferences: { 
-      nodeIntegration: true, 
-      contextIsolation: false,
-      webviewTag: true, // Enable webview tag
-      webSecurity: false, // Disable web security for development
-      allowRunningInsecureContent: true, // Allow running insecure content
-      enableRemoteModule: true // Enable remote module for webview
-    }
-  });
-
-  // Initialize our modules
-  console.log('Initializing workflows module...');
+app.whenReady().then(async () => {
+  createWindow();
+  
+  // Initialize modules
+  const dataDir = path.join(__dirname, 'data');
   workflows.initialize();
-  formTemplates.initialize(path.join(__dirname, 'data'));
-
+  formTemplates.initialize(dataDir);
+  
+  // Create application menu
+  createMenu();
+  
   // Ad-blocker - but configure it to not block navigation
   const blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch);
   blocker.enableBlockingInSession(session.defaultSession);
@@ -540,113 +658,6 @@ app.on('ready', async () => {
     }
   });
 
-  // Create application menu
-  function createMenu() {
-    const template = [
-      {
-        label: 'File',
-        submenu: [
-          {
-            label: 'New Tab',
-            accelerator: 'CmdOrCtrl+T',
-            click: () => {
-              win.webContents.send('new-tab');
-            }
-          },
-          {
-            label: 'Close Tab',
-            accelerator: 'CmdOrCtrl+W',
-            click: () => {
-              win.webContents.send('close-tab');
-            }
-          },
-          { type: 'separator' },
-          {
-            label: 'Exit',
-            accelerator: 'CmdOrCtrl+Q',
-            click: () => {
-              app.quit();
-            }
-          }
-        ]
-      },
-      {
-        label: 'View',
-        submenu: [
-          {
-            label: 'Reload',
-            accelerator: 'CmdOrCtrl+R',
-            click: () => {
-              win.webContents.send('reload-tab');
-            }
-          },
-          { type: 'separator' },
-          {
-            label: 'Toggle Developer Tools',
-            accelerator: 'CmdOrCtrl+Shift+I',
-            click: () => {
-              win.webContents.toggleDevTools();
-            }
-          }
-        ]
-      },
-      {
-        label: 'Automation',
-        submenu: [
-          {
-            label: 'Workflow Manager',
-            click: () => {
-              win.webContents.send('show-workflow-panel');
-            }
-          },
-          {
-            label: 'Form Templates',
-            click: () => {
-              win.webContents.send('show-template-panel');
-            }
-          },
-          { type: 'separator' },
-          {
-            label: 'Start Recording',
-            click: () => {
-              win.webContents.send('start-recording');
-            }
-          },
-          {
-            label: 'Stop Recording',
-            click: () => {
-              win.webContents.send('stop-recording');
-            }
-          }
-        ]
-      },
-      {
-        label: 'Help',
-        submenu: [
-          {
-            label: 'About',
-            click: () => {
-              dialog.showMessageBox(win, {
-                title: 'About Automated Browser',
-                message: 'Automated Browser with Zak Assistant',
-                detail: 'Version 1.0.0\nAn Electron-based autonomous web browser with integrated AI assistant and workflow automation.'
-              });
-            }
-          }
-        ]
-      }
-    ];
-    
-    const menu = Menu.buildFromTemplate(template);
-    Menu.setApplicationMenu(menu);
-  }
-
-  // Load the renderer
-  win.loadFile(path.join(__dirname, 'src/renderer/index.html'));
-  
-  // Open DevTools in development
-  win.webContents.openDevTools();
-  
   // Log any errors
   win.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
     console.error('Failed to load:', errorCode, errorDescription);
