@@ -1,8 +1,9 @@
-const { app, BrowserWindow, session, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, session, Menu, ipcMain, dialog } = require('electron');
 const { ElectronBlocker } = require('@cliqz/adblocker-electron');
 const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
+const url = require('url');
 
 // Import our modules
 console.log('Checking for workflows.js file...');
@@ -19,6 +20,9 @@ try {
 } catch (error) {
   console.error('Error importing workflows module:', error);
 }
+
+// Import custom modules
+const formTemplates = require('./src/main/form-templates');
 
 // Enable webview support
 app.commandLine.appendSwitch('enable-features', 'WebViewTag');
@@ -47,67 +51,189 @@ const workflows = {
     let currentWorkflow = [];
     let workflowName = '';
     let activeWorkflows = {};
+    let scheduledWorkflows = {};
+    
+    // Helper function to schedule workflow execution
+    function scheduleWorkflow(workflow, schedule) {
+      const workflowId = workflow.id;
+      
+      // Clear any existing schedule for this workflow
+      if (scheduledWorkflows[workflowId]) {
+        clearTimeout(scheduledWorkflows[workflowId].timeout);
+        delete scheduledWorkflows[workflowId];
+      }
+      
+      // Calculate next run time
+      let nextRun;
+      if (schedule.type === 'once') {
+        nextRun = new Date(schedule.datetime).getTime();
+      } else if (schedule.type === 'recurring') {
+        // For recurring schedules, calculate next occurrence
+        nextRun = calculateNextRun(schedule);
+      }
+      
+      if (nextRun <= Date.now()) {
+        console.log('Schedule is in the past, not scheduling');
+        return false;
+      }
+      
+      // Schedule the workflow
+      const timeout = setTimeout(async () => {
+        console.log(`Executing scheduled workflow: ${workflow.name}`);
+        
+        try {
+          // Run the workflow
+          activeWorkflows[workflowId] = {
+            id: workflowId,
+            name: workflow.name,
+            currentStep: 0,
+            steps: workflow.steps,
+            startedAt: Date.now()
+          };
+          
+          // If recurring, schedule next run
+          if (schedule.type === 'recurring') {
+            scheduleWorkflow(workflow, schedule);
+          }
+          
+          // Update last run timestamp
+          const workflowsFile = path.join(workflowsDir, 'workflows.json');
+          const workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
+          workflows[workflow.name].lastRun = Date.now();
+          fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
+        } catch (error) {
+          console.error('Error executing scheduled workflow:', error);
+        }
+      }, nextRun - Date.now());
+      
+      scheduledWorkflows[workflowId] = {
+        workflow,
+        schedule,
+        timeout,
+        nextRun
+      };
+      
+      return true;
+    }
+    
+    // Helper function to calculate next run time for recurring schedules
+    function calculateNextRun(schedule) {
+      const now = Date.now();
+      let nextRun = new Date();
+      
+      switch (schedule.interval) {
+        case 'hourly':
+          nextRun.setHours(nextRun.getHours() + 1);
+          nextRun.setMinutes(schedule.minute || 0);
+          nextRun.setSeconds(0);
+          break;
+          
+        case 'daily':
+          nextRun.setDate(nextRun.getDate() + 1);
+          nextRun.setHours(schedule.hour || 0);
+          nextRun.setMinutes(schedule.minute || 0);
+          nextRun.setSeconds(0);
+          break;
+          
+        case 'weekly':
+          const targetDay = schedule.dayOfWeek || 0;
+          const currentDay = nextRun.getDay();
+          const daysToAdd = (targetDay + 7 - currentDay) % 7;
+          nextRun.setDate(nextRun.getDate() + daysToAdd);
+          nextRun.setHours(schedule.hour || 0);
+          nextRun.setMinutes(schedule.minute || 0);
+          nextRun.setSeconds(0);
+          break;
+          
+        case 'monthly':
+          nextRun.setMonth(nextRun.getMonth() + 1);
+          nextRun.setDate(schedule.dayOfMonth || 1);
+          nextRun.setHours(schedule.hour || 0);
+          nextRun.setMinutes(schedule.minute || 0);
+          nextRun.setSeconds(0);
+          break;
+      }
+      
+      // If next run is in the past, add one more interval
+      while (nextRun.getTime() <= now) {
+        switch (schedule.interval) {
+          case 'hourly':
+            nextRun.setHours(nextRun.getHours() + 1);
+            break;
+          case 'daily':
+            nextRun.setDate(nextRun.getDate() + 1);
+            break;
+          case 'weekly':
+            nextRun.setDate(nextRun.getDate() + 7);
+            break;
+          case 'monthly':
+            nextRun.setMonth(nextRun.getMonth() + 1);
+            break;
+        }
+      }
+      
+      return nextRun.getTime();
+    }
     
     // Set up IPC handlers
     ipcMain.handle('workflow:startRecording', (event, name) => {
       console.log('IPC: Start recording workflow', name);
+      
       if (isRecording) {
         return { success: false, message: 'Already recording a workflow' };
       }
       
-      workflowName = name || `Workflow_${Date.now()}`;
+      if (!name) {
+        return { success: false, message: 'Workflow name is required' };
+      }
+      
+      // Reset current workflow
       currentWorkflow = [];
+      workflowName = name;
       isRecording = true;
       
-      return { success: true, message: `Started recording workflow: ${workflowName}` };
+      return { success: true, message: `Started recording workflow: ${name}` };
     });
     
-    ipcMain.handle('workflow:stopRecording', () => {
+    ipcMain.handle('workflow:stopRecording', async (event) => {
       console.log('IPC: Stop recording workflow');
+      
       if (!isRecording) {
-        return { success: false, message: 'No active recording' };
+        return { success: false, message: 'Not currently recording a workflow' };
       }
       
       isRecording = false;
       
-      // Don't save empty workflows
       if (currentWorkflow.length === 0) {
-        return { success: false, message: 'Workflow is empty, nothing to save' };
+        return { success: false, message: 'No steps recorded' };
       }
       
-      // Save the workflow
-      const workflowsFile = path.join(workflowsDir, 'workflows.json');
-      let workflows = {};
-      
       try {
+        // Save workflow to file
+        const workflowsFile = path.join(workflowsDir, 'workflows.json');
+        let workflows = {};
+        
         if (fs.existsSync(workflowsFile)) {
           workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
         }
-      } catch (error) {
-        console.error('Error loading workflows:', error);
-      }
-      
-      workflows[workflowName] = {
-        id: Math.random().toString(36).substr(2, 9),
-        name: workflowName,
-        steps: currentWorkflow,
-        createdAt: Date.now(),
-        lastRun: null
-      };
-      
-      try {
+        
+        // Generate a unique ID for the workflow
+        const workflowId = Date.now().toString();
+        
+        workflows[workflowName] = {
+          id: workflowId,
+          name: workflowName,
+          steps: currentWorkflow,
+          createdAt: Date.now()
+        };
+        
         fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
-        console.log('Saved workflow:', workflowName);
+        
+        return { success: true, message: `Saved workflow: ${workflowName} with ${currentWorkflow.length} steps` };
       } catch (error) {
         console.error('Error saving workflow:', error);
         return { success: false, message: `Error saving workflow: ${error.message}` };
       }
-      
-      return { 
-        success: true, 
-        message: `Saved workflow: ${workflowName}`,
-        workflow: workflows[workflowName]
-      };
     });
     
     ipcMain.handle('workflow:recordStep', (event, step) => {
@@ -247,6 +373,126 @@ const workflows = {
       return { success: true, message: `Deleted workflow: ${name}` };
     });
     
+    // Add new IPC handlers for scheduling
+    ipcMain.handle('workflow:schedule', (event, { name, schedule }) => {
+      console.log('IPC: Schedule workflow', name, schedule);
+      const workflowsFile = path.join(workflowsDir, 'workflows.json');
+      let workflows = {};
+      
+      try {
+        if (fs.existsSync(workflowsFile)) {
+          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
+        }
+      } catch (error) {
+        console.error('Error loading workflows:', error);
+        return { success: false, message: 'Error loading workflows' };
+      }
+      
+      if (!workflows[name]) {
+        return { success: false, message: `Workflow not found: ${name}` };
+      }
+      
+      const workflow = workflows[name];
+      
+      // Add schedule to workflow
+      workflow.schedule = schedule;
+      
+      // Save updated workflow
+      try {
+        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
+      } catch (error) {
+        console.error('Error saving workflow schedule:', error);
+        return { success: false, message: `Error saving schedule: ${error.message}` };
+      }
+      
+      // Schedule the workflow
+      const scheduled = scheduleWorkflow(workflow, schedule);
+      
+      return { 
+        success: true, 
+        message: scheduled ? 
+          `Scheduled workflow: ${name} (Next run: ${new Date(scheduledWorkflows[workflow.id].nextRun).toLocaleString()})` : 
+          'Schedule is in the past, not scheduled',
+        nextRun: scheduled ? scheduledWorkflows[workflow.id].nextRun : null
+      };
+    });
+    
+    ipcMain.handle('workflow:unschedule', (event, name) => {
+      console.log('IPC: Unschedule workflow', name);
+      const workflowsFile = path.join(workflowsDir, 'workflows.json');
+      let workflows = {};
+      
+      try {
+        if (fs.existsSync(workflowsFile)) {
+          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
+        }
+      } catch (error) {
+        console.error('Error loading workflows:', error);
+        return { success: false, message: 'Error loading workflows' };
+      }
+      
+      if (!workflows[name]) {
+        return { success: false, message: `Workflow not found: ${name}` };
+      }
+      
+      const workflow = workflows[name];
+      
+      // Clear schedule
+      if (scheduledWorkflows[workflow.id]) {
+        clearTimeout(scheduledWorkflows[workflow.id].timeout);
+        delete scheduledWorkflows[workflow.id];
+      }
+      
+      // Remove schedule from workflow
+      delete workflow.schedule;
+      
+      // Save updated workflow
+      try {
+        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
+      } catch (error) {
+        console.error('Error saving workflow:', error);
+        return { success: false, message: `Error removing schedule: ${error.message}` };
+      }
+      
+      return { 
+        success: true, 
+        message: `Removed schedule for workflow: ${name}`
+      };
+    });
+    
+    ipcMain.handle('workflow:getSchedule', (event, name) => {
+      console.log('IPC: Get workflow schedule', name);
+      const workflowsFile = path.join(workflowsDir, 'workflows.json');
+      let workflows = {};
+      
+      try {
+        if (fs.existsSync(workflowsFile)) {
+          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
+        }
+      } catch (error) {
+        console.error('Error loading workflows:', error);
+        return { success: false, message: 'Error loading workflows' };
+      }
+      
+      if (!workflows[name]) {
+        return { success: false, message: `Workflow not found: ${name}` };
+      }
+      
+      const workflow = workflows[name];
+      const workflowId = workflow.id;
+      
+      if (!workflow.schedule) {
+        return { success: true, scheduled: false };
+      }
+      
+      return { 
+        success: true, 
+        scheduled: true,
+        schedule: workflow.schedule,
+        nextRun: scheduledWorkflows[workflowId]?.nextRun
+      };
+    });
+    
     console.log('Workflow system initialized');
   }
 };
@@ -268,6 +514,7 @@ app.on('ready', async () => {
   // Initialize our modules
   console.log('Initializing workflows module...');
   workflows.initialize();
+  formTemplates.initialize(path.join(__dirname, 'data'));
 
   // Ad-blocker - but configure it to not block navigation
   const blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch);
@@ -293,139 +540,106 @@ app.on('ready', async () => {
     }
   });
 
-  // Create application menu with workflow options
-  const template = [
-    {
-      label: 'File',
-      submenu: [
-        { role: 'quit' }
-      ]
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' }
-      ]
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' }
-      ]
-    },
-    {
-      label: 'Workflows',
-      submenu: [
-        {
-          label: 'Manage Workflows',
-          click: () => {
-            console.log('Menu: Manage Workflows clicked');
-            win.webContents.executeJavaScript('if (window.workflows) window.workflows.show(); else console.error("Workflows object not found");');
-          }
-        },
-        {
-          label: 'Start Recording',
-          click: async () => {
-            console.log('Menu: Start Recording clicked');
-            const workflowName = `Workflow_${Date.now()}`;
-            
-            try {
-              const result = await ipcMain.emit('workflow:startRecording', null, workflowName);
-              console.log('Start recording result:', result);
-              win.webContents.executeJavaScript(`
-                if (window.workflows) {
-                  document.getElementById('workflow-status').textContent = 'Recording "${workflowName}"...';
-                  window.workflows.show();
-                } else {
-                  console.error("Workflows object not found");
-                }
-              `);
-            } catch (error) {
-              console.error('Error starting recording from menu:', error);
+  // Create application menu
+  function createMenu() {
+    const template = [
+      {
+        label: 'File',
+        submenu: [
+          {
+            label: 'New Tab',
+            accelerator: 'CmdOrCtrl+T',
+            click: () => {
+              win.webContents.send('new-tab');
+            }
+          },
+          {
+            label: 'Close Tab',
+            accelerator: 'CmdOrCtrl+W',
+            click: () => {
+              win.webContents.send('close-tab');
+            }
+          },
+          { type: 'separator' },
+          {
+            label: 'Exit',
+            accelerator: 'CmdOrCtrl+Q',
+            click: () => {
+              app.quit();
             }
           }
-        },
-        {
-          label: 'Stop Recording',
-          click: async () => {
-            console.log('Menu: Stop Recording clicked');
-            try {
-              const result = await ipcMain.emit('workflow:stopRecording');
-              console.log('Stop recording result:', result);
-              win.webContents.executeJavaScript(`
-                if (window.workflows) {
-                  window.workflows.loadWorkflows();
-                } else {
-                  console.error("Workflows object not found");
-                }
-              `);
-            } catch (error) {
-              console.error('Error stopping recording from menu:', error);
+        ]
+      },
+      {
+        label: 'View',
+        submenu: [
+          {
+            label: 'Reload',
+            accelerator: 'CmdOrCtrl+R',
+            click: () => {
+              win.webContents.send('reload-tab');
+            }
+          },
+          { type: 'separator' },
+          {
+            label: 'Toggle Developer Tools',
+            accelerator: 'CmdOrCtrl+Shift+I',
+            click: () => {
+              win.webContents.toggleDevTools();
             }
           }
-        }
-      ]
-    },
-    {
-      label: 'Help',
-      submenu: [
-        {
-          label: 'About AutomatedBrowser',
-          click: () => {
-            const aboutWindow = new BrowserWindow({
-              width: 300,
-              height: 200,
-              autoHideMenuBar: true,
-              resizable: false,
-              webPreferences: {
-                nodeIntegration: true,
-                contextIsolation: false
-              }
-            });
-            
-            aboutWindow.loadURL(`data:text/html;charset=utf-8,
-              <html>
-                <head>
-                  <title>About AutomatedBrowser</title>
-                  <style>
-                    body { font-family: Arial; padding: 20px; text-align: center; }
-                    h2 { margin-top: 0; }
-                  </style>
-                </head>
-                <body>
-                  <h2>AutomatedBrowser</h2>
-                  <p>Version 1.0.0</p>
-                  <p>An automation-focused browser with workflow recording capabilities</p>
-                </body>
-              </html>
-            `);
+        ]
+      },
+      {
+        label: 'Automation',
+        submenu: [
+          {
+            label: 'Workflow Manager',
+            click: () => {
+              win.webContents.send('show-workflow-panel');
+            }
+          },
+          {
+            label: 'Form Templates',
+            click: () => {
+              win.webContents.send('show-template-panel');
+            }
+          },
+          { type: 'separator' },
+          {
+            label: 'Start Recording',
+            click: () => {
+              win.webContents.send('start-recording');
+            }
+          },
+          {
+            label: 'Stop Recording',
+            click: () => {
+              win.webContents.send('stop-recording');
+            }
           }
-        },
-        {
-          label: 'Toggle Developer Tools',
-          click: () => {
-            win.webContents.toggleDevTools();
+        ]
+      },
+      {
+        label: 'Help',
+        submenu: [
+          {
+            label: 'About',
+            click: () => {
+              dialog.showMessageBox(win, {
+                title: 'About Automated Browser',
+                message: 'Automated Browser with Zak Assistant',
+                detail: 'Version 1.0.0\nAn Electron-based autonomous web browser with integrated AI assistant and workflow automation.'
+              });
+            }
           }
-        }
-      ]
-    }
-  ];
-  
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
+        ]
+      }
+    ];
+    
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
+  }
 
   // Load the renderer
   win.loadFile(path.join(__dirname, 'src/renderer/index.html'));
@@ -449,5 +663,372 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
+  }
+});
+
+async function executeWorkflowStep(webContents, step, workflowId) {
+  console.log(`Executing workflow step: ${JSON.stringify(step)}`);
+  
+  try {
+    switch (step.type) {
+      case 'navigation':
+        console.log(`Navigating to: ${step.url}`);
+        webContents.loadURL(step.url);
+        break;
+        
+      case 'click':
+        console.log(`Clicking element: ${JSON.stringify(step.selector)}`);
+        await webContents.executeJavaScript(`
+          (function() {
+            try {
+              const element = document.querySelector(${JSON.stringify(step.selector)});
+              if (!element) {
+                throw new Error('Element not found: ' + ${JSON.stringify(step.selector)});
+              }
+              element.click();
+              return true;
+            } catch (error) {
+              console.error('Error clicking element:', error);
+              return false;
+            }
+          })()
+        `);
+        break;
+        
+      case 'input':
+        console.log(`Filling input: ${JSON.stringify(step.selector)} with value: ${step.value}`);
+        await webContents.executeJavaScript(`
+          (function() {
+            try {
+              const element = document.querySelector(${JSON.stringify(step.selector)});
+              if (!element) {
+                throw new Error('Element not found: ' + ${JSON.stringify(step.selector)});
+              }
+              
+              // Set the value
+              element.value = ${JSON.stringify(step.value)};
+              
+              // Dispatch events to trigger any listeners
+              element.dispatchEvent(new Event('input', { bubbles: true }));
+              element.dispatchEvent(new Event('change', { bubbles: true }));
+              
+              return true;
+            } catch (error) {
+              console.error('Error filling input:', error);
+              return false;
+            }
+          })()
+        `);
+        break;
+        
+      case 'select':
+        console.log(`Selecting option: ${JSON.stringify(step.value)} in select: ${JSON.stringify(step.selector)}`);
+        await webContents.executeJavaScript(`
+          (function() {
+            try {
+              const element = document.querySelector(${JSON.stringify(step.selector)});
+              if (!element) {
+                throw new Error('Element not found: ' + ${JSON.stringify(step.selector)});
+              }
+              
+              if (element.tagName.toLowerCase() !== 'select') {
+                throw new Error('Element is not a select: ' + ${JSON.stringify(step.selector)});
+              }
+              
+              // Set the value
+              element.value = ${JSON.stringify(step.value)};
+              
+              // Dispatch change event
+              element.dispatchEvent(new Event('change', { bubbles: true }));
+              
+              return true;
+            } catch (error) {
+              console.error('Error selecting option:', error);
+              return false;
+            }
+          })()
+        `);
+        break;
+        
+      case 'checkbox':
+        console.log(`Setting checkbox: ${JSON.stringify(step.selector)} to: ${step.checked}`);
+        await webContents.executeJavaScript(`
+          (function() {
+            try {
+              const element = document.querySelector(${JSON.stringify(step.selector)});
+              if (!element) {
+                throw new Error('Element not found: ' + ${JSON.stringify(step.selector)});
+              }
+              
+              if (element.type.toLowerCase() !== 'checkbox') {
+                throw new Error('Element is not a checkbox: ' + ${JSON.stringify(step.selector)});
+              }
+              
+              // Set the checked state
+              element.checked = ${step.checked};
+              
+              // Dispatch change event
+              element.dispatchEvent(new Event('change', { bubbles: true }));
+              
+              return true;
+            } catch (error) {
+              console.error('Error setting checkbox:', error);
+              return false;
+            }
+          })()
+        `);
+        break;
+        
+      case 'radio':
+        console.log(`Setting radio: ${JSON.stringify(step.selector)} to checked`);
+        await webContents.executeJavaScript(`
+          (function() {
+            try {
+              const element = document.querySelector(${JSON.stringify(step.selector)});
+              if (!element) {
+                throw new Error('Element not found: ' + ${JSON.stringify(step.selector)});
+              }
+              
+              if (element.type.toLowerCase() !== 'radio') {
+                throw new Error('Element is not a radio button: ' + ${JSON.stringify(step.selector)});
+              }
+              
+              // Set the checked state
+              element.checked = true;
+              
+              // Dispatch change event
+              element.dispatchEvent(new Event('change', { bubbles: true }));
+              
+              return true;
+            } catch (error) {
+              console.error('Error setting radio button:', error);
+              return false;
+            }
+          })()
+        `);
+        break;
+        
+      case 'wait':
+        console.log(`Waiting for ${step.duration}ms`);
+        await new Promise(resolve => setTimeout(resolve, step.duration));
+        break;
+        
+      case 'waitForElement':
+        console.log(`Waiting for element: ${JSON.stringify(step.selector)}`);
+        await webContents.executeJavaScript(`
+          (function() {
+            return new Promise((resolve, reject) => {
+              // Check if element already exists
+              if (document.querySelector(${JSON.stringify(step.selector)})) {
+                resolve(true);
+                return;
+              }
+              
+              // Set a timeout to avoid waiting forever
+              const timeout = setTimeout(() => {
+                observer.disconnect();
+                reject(new Error('Timeout waiting for element: ' + ${JSON.stringify(step.selector)}));
+              }, ${step.timeout || 10000});
+              
+              // Set up a mutation observer to watch for the element
+              const observer = new MutationObserver((mutations, obs) => {
+                if (document.querySelector(${JSON.stringify(step.selector)})) {
+                  clearTimeout(timeout);
+                  obs.disconnect();
+                  resolve(true);
+                }
+              });
+              
+              observer.observe(document.body, {
+                childList: true,
+                subtree: true
+              });
+            });
+          })()
+        `).catch(error => {
+          console.error('Error waiting for element:', error);
+          return false;
+        });
+        break;
+        
+      case 'formFill':
+        console.log(`Filling form with data: ${JSON.stringify(step.formData)}`);
+        await webContents.executeJavaScript(`
+          (function() {
+            try {
+              const formData = ${JSON.stringify(step.formData)};
+              const results = [];
+              
+              // Process each form field
+              for (const field of formData) {
+                const element = document.querySelector(field.selector);
+                if (!element) {
+                  results.push({
+                    selector: field.selector,
+                    success: false,
+                    error: 'Element not found'
+                  });
+                  continue;
+                }
+                
+                try {
+                  // Handle different input types
+                  const tagName = element.tagName.toLowerCase();
+                  const type = element.type ? element.type.toLowerCase() : '';
+                  
+                  if (tagName === 'input') {
+                    if (type === 'checkbox' || type === 'radio') {
+                      element.checked = field.value === true || field.value === 'true' || field.value === 1;
+                    } else if (type === 'file') {
+                      // File inputs can't be set directly via JavaScript for security reasons
+                      results.push({
+                        selector: field.selector,
+                        success: false,
+                        error: 'File inputs cannot be automated directly'
+                      });
+                      continue;
+                    } else {
+                      element.value = field.value;
+                    }
+                  } else if (tagName === 'select') {
+                    element.value = field.value;
+                  } else if (tagName === 'textarea') {
+                    element.value = field.value;
+                  } else {
+                    results.push({
+                      selector: field.selector,
+                      success: false,
+                      error: 'Unsupported element type: ' + tagName
+                    });
+                    continue;
+                  }
+                  
+                  // Dispatch appropriate events
+                  if (type === 'checkbox' || type === 'radio' || tagName === 'select') {
+                    element.dispatchEvent(new Event('change', { bubbles: true }));
+                  } else {
+                    element.dispatchEvent(new Event('input', { bubbles: true }));
+                    element.dispatchEvent(new Event('change', { bubbles: true }));
+                  }
+                  
+                  results.push({
+                    selector: field.selector,
+                    success: true
+                  });
+                } catch (fieldError) {
+                  results.push({
+                    selector: field.selector,
+                    success: false,
+                    error: fieldError.message
+                  });
+                }
+              }
+              
+              return results;
+            } catch (error) {
+              console.error('Error filling form:', error);
+              return [{ success: false, error: error.message }];
+            }
+          })()
+        `);
+        break;
+        
+      default:
+        console.error(`Unknown step type: ${step.type}`);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error executing workflow step:', error);
+    return false;
+  }
+}
+
+// Add event handlers for webContents
+app.on('web-contents-created', (event, contents) => {
+  if (contents.getType() === 'webview') {
+    console.log('Webview created');
+    
+    // Handle navigation events
+    contents.on('did-navigate', (event, url) => {
+      console.log('Webview navigated to:', url);
+      
+      // Record navigation step if recording
+      if (isRecording) {
+        currentWorkflow.push({
+          type: 'navigation',
+          url
+        });
+      }
+    });
+    
+    // Handle IPC messages from the webview
+    contents.on('ipc-message', (event, channel, ...args) => {
+      console.log('IPC message from webview:', channel, args);
+      
+      if (channel === 'link-clicked') {
+        // No need to record this as it will trigger a navigation event
+      } else if (channel === 'page-loaded') {
+        // Record a wait step to ensure the page is loaded
+        if (isRecording) {
+          currentWorkflow.push({
+            type: 'wait',
+            duration: 1000 // Wait 1 second for page to stabilize
+          });
+        }
+      } else if (channel === 'input-changed' && isRecording) {
+        const data = args[0];
+        console.log('Input changed:', data);
+        
+        // Record the appropriate step based on input type
+        if (data.type === 'checkbox') {
+          currentWorkflow.push({
+            type: 'checkbox',
+            selector: data.selector,
+            checked: data.checked
+          });
+        } else if (data.type === 'radio') {
+          currentWorkflow.push({
+            type: 'radio',
+            selector: data.selector
+          });
+        } else if (data.type === 'select') {
+          currentWorkflow.push({
+            type: 'select',
+            selector: data.selector,
+            value: data.value
+          });
+        } else {
+          currentWorkflow.push({
+            type: 'input',
+            selector: data.selector,
+            value: data.value
+          });
+        }
+      } else if (channel === 'form-submitted' && isRecording) {
+        const data = args[0];
+        console.log('Form submitted:', data);
+        
+        // Record a formFill step with all form fields
+        if (data.fields && data.fields.length > 0) {
+          const formData = data.fields.map(field => ({
+            selector: field.selector,
+            value: field.value
+          }));
+          
+          currentWorkflow.push({
+            type: 'formFill',
+            formSelector: data.formSelector,
+            formData
+          });
+          
+          // Add a click step to submit the form
+          currentWorkflow.push({
+            type: 'click',
+            selector: `${data.formSelector} [type="submit"]`
+          });
+        }
+      }
+    });
   }
 });

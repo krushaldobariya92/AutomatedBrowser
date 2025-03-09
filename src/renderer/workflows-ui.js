@@ -51,104 +51,325 @@ function initWorkflowUI() {
 
 // Create workflow panel UI
 function createWorkflowPanel() {
-  console.log('Creating workflow panel...');
-  
-  // Remove existing panel if it exists
-  const existingPanel = document.getElementById('workflow-panel');
-  if (existingPanel) {
-    existingPanel.remove();
-  }
-  
-  const existingOverlay = document.getElementById('workflow-overlay');
-  if (existingOverlay) {
-    existingOverlay.remove();
-  }
+  console.log('Creating workflow panel');
   
   // Create overlay
   const overlay = document.createElement('div');
-  overlay.className = 'workflow-overlay';
   overlay.id = 'workflow-overlay';
-  overlay.style.cssText = `
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 999;
-    display: none;
-  `;
+  overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 999; display: none;';
+  overlay.addEventListener('click', hideWorkflowPanel);
   
-  // Create workflow panel
-  workflowPanelElement = document.createElement('div');
-  workflowPanelElement.id = 'workflow-panel';
-  workflowPanelElement.className = 'workflow-panel';
-  workflowPanelElement.style.cssText = `
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 400px;
-    max-height: 500px;
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    display: none;
-    flex-direction: column;
-    z-index: 1000;
-    overflow: hidden;
-  `;
+  // Create panel
+  const panel = document.createElement('div');
+  panel.id = 'workflow-panel';
+  panel.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); z-index: 1000; display: none; width: 600px; max-height: 80vh; overflow-y: auto;';
+  panel.addEventListener('click', e => e.stopPropagation());
   
-  workflowPanelElement.innerHTML = `
-    <div class="workflow-header" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #1E3A8A; color: white;">
-      <h3 style="margin: 0; font-size: 16px;">Automated Workflows</h3>
-      <button id="workflow-close" class="workflow-close-btn" style="background: none; border: none; color: white; font-size: 20px; cursor: pointer;">×</button>
+  // Create content
+  panel.innerHTML = `
+    <h2 style="margin: 0 0 20px 0; color: #1E3A8A;">Workflow Manager</h2>
+    
+    <div class="workflow-controls" style="margin-bottom: 20px;">
+      <input type="text" id="workflow-name" placeholder="Workflow name" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; width: 200px;">
+      <button id="record-workflow" style="background: #1E3A8A; color: white; border: none; border-radius: 4px; padding: 8px 12px; cursor: pointer;">Record</button>
+      <button id="stop-workflow" style="background: #DC2626; color: white; border: none; border-radius: 4px; padding: 8px 12px; margin-left: 5px; cursor: not-allowed; opacity: 0.5;" disabled>Stop</button>
     </div>
-    <div class="workflow-content" style="padding: 16px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px;">
-      <div class="workflow-controls" style="display: flex; gap: 8px;">
-        <input type="text" id="workflow-name" placeholder="Workflow name" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-        <button id="workflow-record" class="workflow-btn record" style="padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; background: #10B981; color: white;">Record</button>
-        <button id="workflow-stop" class="workflow-btn stop" style="padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; background: #EF4444; color: white; opacity: 0.5; cursor: not-allowed;" disabled>Stop</button>
+    
+    <div class="workflow-list" style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 4px; max-height: 300px; overflow-y: auto;">
+    </div>
+    
+    <div class="workflow-actions" style="display: flex; gap: 10px; margin-bottom: 20px;">
+      <button id="run-workflow" style="background: #059669; color: white; border: none; border-radius: 4px; padding: 8px 12px; cursor: not-allowed; opacity: 0.5;" disabled>Run</button>
+      <button id="delete-workflow" style="background: #DC2626; color: white; border: none; border-radius: 4px; padding: 8px 12px; cursor: not-allowed; opacity: 0.5;" disabled>Delete</button>
+      <button id="schedule-workflow" style="background: #6366F1; color: white; border: none; border-radius: 4px; padding: 8px 12px; cursor: not-allowed; opacity: 0.5;" disabled>Schedule</button>
+    </div>
+    
+    <div id="schedule-form" style="display: none; margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 4px;">
+      <h3 style="margin: 0 0 15px 0; color: #1E3A8A;">Schedule Workflow</h3>
+      
+      <div style="margin-bottom: 15px;">
+        <label style="display: block; margin-bottom: 5px;">Schedule Type</label>
+        <select id="schedule-type" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          <option value="once">Run Once</option>
+          <option value="recurring">Recurring</option>
+        </select>
       </div>
-      <div class="workflow-status" id="workflow-status" style="padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 14px;">Ready</div>
-      <div class="workflow-list-header" style="display: flex; justify-content: space-between; align-items: center;">
-        <h4 style="margin: 0; font-size: 14px;">Saved Workflows</h4>
-        <div class="workflow-actions" style="display: flex; gap: 8px;">
-          <button id="workflow-run" class="workflow-btn run" style="padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; background: #3B82F6; color: white; opacity: 0.5; cursor: not-allowed;" disabled>Run</button>
-          <button id="workflow-delete" class="workflow-btn delete" style="padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; background: #6B7280; color: white; opacity: 0.5; cursor: not-allowed;" disabled>Delete</button>
+      
+      <div id="once-schedule" style="margin-bottom: 15px;">
+        <label style="display: block; margin-bottom: 5px;">Date and Time</label>
+        <input type="datetime-local" id="schedule-datetime" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+      </div>
+      
+      <div id="recurring-schedule" style="display: none;">
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 5px;">Interval</label>
+          <select id="schedule-interval" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            <option value="hourly">Hourly</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        
+        <div id="schedule-details" style="margin-bottom: 15px;">
+          <!-- Interval-specific options will be dynamically added here -->
         </div>
       </div>
-      <div class="workflow-list" id="workflow-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto;">
-        <div class="workflow-empty" style="text-align: center; color: #6B7280; font-size: 14px; padding: 20px 0;">No workflows yet. Record one to get started!</div>
+      
+      <div style="display: flex; gap: 10px;">
+        <button id="save-schedule" style="background: #059669; color: white; border: none; border-radius: 4px; padding: 8px 12px; cursor: pointer;">Save Schedule</button>
+        <button id="remove-schedule" style="background: #DC2626; color: white; border: none; border-radius: 4px; padding: 8px 12px; cursor: pointer;">Remove Schedule</button>
+        <button id="cancel-schedule" style="background: #6B7280; color: white; border: none; border-radius: 4px; padding: 8px 12px; cursor: pointer;">Cancel</button>
       </div>
     </div>
+    
+    <div id="workflow-status" style="color: #6B7280; font-size: 14px;"></div>
   `;
   
-  // Add to DOM
+  // Add to document
   document.body.appendChild(overlay);
-  document.body.appendChild(workflowPanelElement);
+  document.body.appendChild(panel);
   
-  // Get UI elements
-  workflowListElement = document.getElementById('workflow-list');
-  recordButton = document.getElementById('workflow-record');
-  stopButton = document.getElementById('workflow-stop');
-  workflowNameInput = document.getElementById('workflow-name');
-  runButton = document.getElementById('workflow-run');
-  deleteButton = document.getElementById('workflow-delete');
-  statusElement = document.getElementById('workflow-status');
+  // Store references to UI elements
+  workflowPanelElement = panel;
+  workflowListElement = panel.querySelector('.workflow-list');
+  recordButton = panel.querySelector('#record-workflow');
+  stopButton = panel.querySelector('#stop-workflow');
+  workflowNameInput = panel.querySelector('#workflow-name');
+  runButton = panel.querySelector('#run-workflow');
+  deleteButton = panel.querySelector('#delete-workflow');
+  statusElement = panel.querySelector('#workflow-status');
   
-  // Add close handler
-  document.getElementById('workflow-close').addEventListener('click', hideWorkflowPanel);
-  document.getElementById('workflow-overlay').addEventListener('click', hideWorkflowPanel);
+  // Add schedule button reference
+  const scheduleButton = panel.querySelector('#schedule-workflow');
+  const scheduleForm = panel.querySelector('#schedule-form');
+  const scheduleType = panel.querySelector('#schedule-type');
+  const onceSchedule = panel.querySelector('#once-schedule');
+  const recurringSchedule = panel.querySelector('#recurring-schedule');
+  const scheduleInterval = panel.querySelector('#schedule-interval');
+  const scheduleDetails = panel.querySelector('#schedule-details');
+  const saveScheduleButton = panel.querySelector('#save-schedule');
+  const removeScheduleButton = panel.querySelector('#remove-schedule');
+  const cancelScheduleButton = panel.querySelector('#cancel-schedule');
   
-  console.log('Workflow panel created with elements:', {
-    list: !!workflowListElement,
-    record: !!recordButton,
-    stop: !!stopButton,
-    name: !!workflowNameInput,
-    run: !!runButton,
-    delete: !!deleteButton,
-    status: !!statusElement
+  // Schedule type change handler
+  scheduleType.addEventListener('change', () => {
+    if (scheduleType.value === 'once') {
+      onceSchedule.style.display = 'block';
+      recurringSchedule.style.display = 'none';
+    } else {
+      onceSchedule.style.display = 'none';
+      recurringSchedule.style.display = 'block';
+      updateIntervalOptions();
+    }
+  });
+  
+  // Interval change handler
+  scheduleInterval.addEventListener('change', updateIntervalOptions);
+  
+  // Update interval-specific options
+  function updateIntervalOptions() {
+    const interval = scheduleInterval.value;
+    let html = '';
+    
+    switch (interval) {
+      case 'hourly':
+        html = `
+          <label style="display: block; margin-bottom: 5px;">Minute</label>
+          <input type="number" id="schedule-minute" min="0" max="59" value="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+        `;
+        break;
+        
+      case 'daily':
+        html = `
+          <div style="margin-bottom: 10px;">
+            <label style="display: block; margin-bottom: 5px;">Hour</label>
+            <input type="number" id="schedule-hour" min="0" max="23" value="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 5px;">Minute</label>
+            <input type="number" id="schedule-minute" min="0" max="59" value="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          </div>
+        `;
+        break;
+        
+      case 'weekly':
+        html = `
+          <div style="margin-bottom: 10px;">
+            <label style="display: block; margin-bottom: 5px;">Day of Week</label>
+            <select id="schedule-day" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+              <option value="0">Sunday</option>
+              <option value="1">Monday</option>
+              <option value="2">Tuesday</option>
+              <option value="3">Wednesday</option>
+              <option value="4">Thursday</option>
+              <option value="5">Friday</option>
+              <option value="6">Saturday</option>
+            </select>
+          </div>
+          <div style="margin-bottom: 10px;">
+            <label style="display: block; margin-bottom: 5px;">Hour</label>
+            <input type="number" id="schedule-hour" min="0" max="23" value="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 5px;">Minute</label>
+            <input type="number" id="schedule-minute" min="0" max="59" value="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          </div>
+        `;
+        break;
+        
+      case 'monthly':
+        html = `
+          <div style="margin-bottom: 10px;">
+            <label style="display: block; margin-bottom: 5px;">Day of Month</label>
+            <input type="number" id="schedule-day" min="1" max="31" value="1" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          </div>
+          <div style="margin-bottom: 10px;">
+            <label style="display: block; margin-bottom: 5px;">Hour</label>
+            <input type="number" id="schedule-hour" min="0" max="23" value="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          </div>
+          <div>
+            <label style="display: block; margin-bottom: 5px;">Minute</label>
+            <input type="number" id="schedule-minute" min="0" max="59" value="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+          </div>
+        `;
+        break;
+    }
+    
+    scheduleDetails.innerHTML = html;
+  }
+  
+  // Schedule button click handler
+  scheduleButton.addEventListener('click', async () => {
+    const selectedItem = document.querySelector('.workflow-item.selected');
+    if (!selectedItem) return;
+    
+    const workflowName = selectedItem.dataset.name;
+    
+    // Get current schedule
+    try {
+      const result = await ipcRenderer.invoke('workflow:getSchedule', workflowName);
+      console.log('Get schedule result:', result);
+      
+      if (result.success && result.scheduled) {
+        // Pre-fill form with current schedule
+        const schedule = result.schedule;
+        scheduleType.value = schedule.type;
+        
+        if (schedule.type === 'once') {
+          const datetime = new Date(schedule.datetime);
+          document.querySelector('#schedule-datetime').value = datetime.toISOString().slice(0, 16);
+          onceSchedule.style.display = 'block';
+          recurringSchedule.style.display = 'none';
+        } else {
+          scheduleInterval.value = schedule.interval;
+          onceSchedule.style.display = 'none';
+          recurringSchedule.style.display = 'block';
+          updateIntervalOptions();
+          
+          // Set interval-specific values
+          if (schedule.minute !== undefined) {
+            document.querySelector('#schedule-minute').value = schedule.minute;
+          }
+          if (schedule.hour !== undefined) {
+            document.querySelector('#schedule-hour').value = schedule.hour;
+          }
+          if (schedule.dayOfWeek !== undefined) {
+            document.querySelector('#schedule-day').value = schedule.dayOfWeek;
+          }
+          if (schedule.dayOfMonth !== undefined) {
+            document.querySelector('#schedule-day').value = schedule.dayOfMonth;
+          }
+        }
+        
+        removeScheduleButton.style.display = 'block';
+      } else {
+        // Reset form for new schedule
+        scheduleType.value = 'once';
+        document.querySelector('#schedule-datetime').value = new Date().toISOString().slice(0, 16);
+        onceSchedule.style.display = 'block';
+        recurringSchedule.style.display = 'none';
+        removeScheduleButton.style.display = 'none';
+      }
+      
+      scheduleForm.style.display = 'block';
+    } catch (error) {
+      console.error('Error getting schedule:', error);
+      updateStatus('Error getting schedule');
+    }
+  });
+  
+  // Save schedule button click handler
+  saveScheduleButton.addEventListener('click', async () => {
+    const selectedItem = document.querySelector('.workflow-item.selected');
+    if (!selectedItem) return;
+    
+    const workflowName = selectedItem.dataset.name;
+    let schedule = {
+      type: scheduleType.value
+    };
+    
+    if (schedule.type === 'once') {
+      schedule.datetime = new Date(document.querySelector('#schedule-datetime').value).toISOString();
+    } else {
+      schedule.interval = scheduleInterval.value;
+      schedule.minute = parseInt(document.querySelector('#schedule-minute').value);
+      
+      if (schedule.interval !== 'hourly') {
+        schedule.hour = parseInt(document.querySelector('#schedule-hour').value);
+      }
+      
+      if (schedule.interval === 'weekly') {
+        schedule.dayOfWeek = parseInt(document.querySelector('#schedule-day').value);
+      } else if (schedule.interval === 'monthly') {
+        schedule.dayOfMonth = parseInt(document.querySelector('#schedule-day').value);
+      }
+    }
+    
+    try {
+      const result = await ipcRenderer.invoke('workflow:schedule', { name: workflowName, schedule });
+      console.log('Schedule result:', result);
+      
+      if (result.success) {
+        updateStatus(result.message);
+        scheduleForm.style.display = 'none';
+        loadWorkflows();
+      } else {
+        updateStatus(result.message);
+      }
+    } catch (error) {
+      console.error('Error scheduling workflow:', error);
+      updateStatus('Error scheduling workflow');
+    }
+  });
+  
+  // Remove schedule button click handler
+  removeScheduleButton.addEventListener('click', async () => {
+    const selectedItem = document.querySelector('.workflow-item.selected');
+    if (!selectedItem) return;
+    
+    const workflowName = selectedItem.dataset.name;
+    
+    try {
+      const result = await ipcRenderer.invoke('workflow:unschedule', workflowName);
+      console.log('Unschedule result:', result);
+      
+      if (result.success) {
+        updateStatus(result.message);
+        scheduleForm.style.display = 'none';
+        loadWorkflows();
+      } else {
+        updateStatus(result.message);
+      }
+    } catch (error) {
+      console.error('Error removing schedule:', error);
+      updateStatus('Error removing schedule');
+    }
+  });
+  
+  // Cancel schedule button click handler
+  cancelScheduleButton.addEventListener('click', () => {
+    scheduleForm.style.display = 'none';
   });
 }
 
@@ -358,6 +579,12 @@ async function loadWorkflows() {
         deleteButton.style.cursor = 'not-allowed';
       }
       
+      if (scheduleButton) {
+        scheduleButton.disabled = true;
+        scheduleButton.style.opacity = '0.5';
+        scheduleButton.style.cursor = 'not-allowed';
+      }
+      
       return;
     }
     
@@ -372,6 +599,15 @@ async function loadWorkflows() {
       const createdDate = new Date(workflow.createdAt).toLocaleDateString();
       const lastRunDate = workflow.lastRun ? new Date(workflow.lastRun).toLocaleDateString() : 'Never';
       
+      let scheduleInfo = '';
+      if (workflow.schedule) {
+        if (workflow.schedule.type === 'once') {
+          scheduleInfo = `<div style="color: #6366F1;">Scheduled: ${new Date(workflow.schedule.datetime).toLocaleString()}</div>`;
+        } else {
+          scheduleInfo = `<div style="color: #6366F1;">Recurring: ${workflow.schedule.interval}</div>`;
+        }
+      }
+      
       item.innerHTML = `
         <div class="workflow-item-header" style="display: flex; justify-content: space-between; font-weight: 500;">
           <span>${name}</span>
@@ -379,6 +615,7 @@ async function loadWorkflows() {
         </div>
         <div class="workflow-item-details" style="font-size: 12px; color: #6B7280; margin-top: 4px;">
           Created: ${createdDate} | Last run: ${lastRunDate}
+          ${scheduleInfo}
         </div>
       `;
       
@@ -395,7 +632,7 @@ async function loadWorkflows() {
         item.style.borderColor = '#3B82F6';
         item.style.background = 'rgba(59, 130, 246, 0.1)';
         
-        // Enable run and delete buttons
+        // Enable buttons
         if (runButton) {
           runButton.disabled = false;
           runButton.style.opacity = '1';
@@ -406,6 +643,12 @@ async function loadWorkflows() {
           deleteButton.disabled = false;
           deleteButton.style.opacity = '1';
           deleteButton.style.cursor = 'pointer';
+        }
+        
+        if (scheduleButton) {
+          scheduleButton.disabled = false;
+          scheduleButton.style.opacity = '1';
+          scheduleButton.style.cursor = 'pointer';
         }
       });
       

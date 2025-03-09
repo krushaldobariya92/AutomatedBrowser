@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
+    <meta charset="UTF-8">
     <title>AutomatedBrowser</title>
     <style>
       body { margin: 0; font-family: Arial; }
@@ -57,6 +58,7 @@
     <script src="tabs-ui.js"></script>
     <script src="zak-ui.js"></script>
     <script src="workflows-ui.js"></script>
+    <script src="form-templates-ui.js"></script>
     <script>
       // Add event listeners for webview navigation
       document.addEventListener('DOMContentLoaded', () => {
@@ -189,6 +191,36 @@
             // Update Zak message
             updateZakMessage('Page loaded successfully!');
           });
+        }
+      });
+      
+      // Handle IPC messages from main process
+      window.electron.ipcRenderer.on('show-workflow-panel', () => {
+        if (typeof showWorkflowPanel === 'function') {
+          showWorkflowPanel();
+        }
+      });
+      
+      window.electron.ipcRenderer.on('show-template-panel', () => {
+        if (typeof formTemplatesPresenter === 'object' && formTemplatesPresenter.showTemplatePanel) {
+          formTemplatesPresenter.showTemplatePanel();
+        }
+      });
+      
+      window.electron.ipcRenderer.on('start-recording', () => {
+        if (typeof startCapturingActions === 'function') {
+          // Prompt for workflow name
+          const workflowName = prompt('Enter a name for the workflow:');
+          if (workflowName) {
+            document.getElementById('workflow-name').value = workflowName;
+            startCapturingActions();
+          }
+        }
+      });
+      
+      window.electron.ipcRenderer.on('stop-recording', () => {
+        if (typeof stopCapturingActions === 'function') {
+          stopCapturingActions();
         }
       });
     </script>
