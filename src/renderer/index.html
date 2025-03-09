@@ -17,6 +17,10 @@
       .zak-input-container { display: flex; padding: 10px; border-top: 1px solid #ddd; }
       .zak-input { flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
       .zak-send-btn { padding: 8px 15px; background: #1E3A8A; color: white; border: none; border-radius: 4px; margin-left: 5px; cursor: pointer; }
+      /* Initial state for workflow panel and overlay */
+      #workflow-panel, #workflow-overlay {
+        display: none;
+      }
     </style>
   </head>
   <body>
@@ -27,6 +31,11 @@
       <div class="content">
         <div class="url-bar-container">
           <input type="text" class="url-bar" id="urlBar" placeholder="Enter URL">
+          <button id="workflow-btn" title="Manage Workflows" style="background: #1E3A8A; color: white; border: none; border-radius: 4px; padding: 8px 12px; margin-left: 5px; cursor: pointer;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+              <path d="M6 2a.5.5 0 0 1 .47.33L10 12.036l1.53-4.208A.5.5 0 0 1 12 7.5h3.5a.5.5 0 0 1 0 1h-3.15l-1.88 5.17a.5.5 0 0 1-.94 0L6 3.964 4.47 8.172A.5.5 0 0 1 4 8.5H.5a.5.5 0 0 1 0-1h3.15l1.88-5.17A.5.5 0 0 1 6 2Z"/>
+            </svg>
+          </button>
         </div>
         <webview id="webview" src="https://duckduckgo.com" style="width: 100%; height: calc(100% - 40px);" 
           nodeintegration 
@@ -47,12 +56,21 @@
     </div>
     <script src="tabs-ui.js"></script>
     <script src="zak-ui.js"></script>
+    <script src="workflows-ui.js"></script>
     <script>
       // Add event listeners for webview navigation
       document.addEventListener('DOMContentLoaded', () => {
         const webview = document.getElementById('webview');
         const urlBar = document.getElementById('urlBar');
         const zakMessages = document.getElementById('zakMessages');
+        const workflowBtn = document.getElementById('workflow-btn');
+        
+        // Set up workflow button
+        if (workflowBtn) {
+          workflowBtn.addEventListener('click', () => {
+            window.workflows.show();
+          });
+        }
         
         // Function to update Zak's messages
         function updateZakMessage(message) {
