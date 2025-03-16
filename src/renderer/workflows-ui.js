@@ -27,6 +27,7 @@ let stopButton;
 let workflowNameInput;
 let runButton;
 let deleteButton;
+let scheduleButton;
 let statusElement;
 
 // State
@@ -156,10 +157,10 @@ function createWorkflowPanel() {
   workflowNameInput = panel.querySelector('#workflow-name');
   runButton = panel.querySelector('#run-workflow');
   deleteButton = panel.querySelector('#delete-workflow');
+  scheduleButton = panel.querySelector('#schedule-workflow');
   statusElement = panel.querySelector('#workflow-status');
   
   // Add schedule button reference
-  const scheduleButton = panel.querySelector('#schedule-workflow');
   const scheduleForm = panel.querySelector('#schedule-form');
   const scheduleType = panel.querySelector('#schedule-type');
   const onceSchedule = panel.querySelector('#once-schedule');

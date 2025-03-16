@@ -123,7 +123,7 @@ AutomatedBrowser/
 - Background task automation
 - Workflow recording system
 - Self-organizing workspaces
-- DeepSeek R1 integration
+- Gemma3 integration
 - Smart data management
 
 ### Phase 3 - Intelligence Enhancement

@@ -87,9 +87,15 @@ class FormTemplateController {
   }
 
   setupIpcHandlers() {
-    // Get all templates
+    // Get all templates - support both new and legacy channel names
     ipcMain.handle('formTemplate:getAll', () => {
       console.log('IPC: Get all form templates');
+      return this.model.getTemplates();
+    });
+    
+    // Legacy handler for backward compatibility
+    ipcMain.handle('formTemplates:get', () => {
+      console.log('Legacy IPC: Get all form templates');
       return this.model.getTemplates();
     });
 

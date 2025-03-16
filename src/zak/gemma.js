@@ -1,10 +1,10 @@
 const { ipcMain } = require('electron');
 const fetch = require('node-fetch');
 
-class R1Integration {
+class GemmaIntegration {
     constructor() {
         this.initialized = false;
-        this.modelName = 'deepseek-coder:8b';
+        this.modelName = 'gemma3:4b';
         this.ollamaEndpoint = 'http://localhost:11434';
         this.setupIpcHandlers();
     }
@@ -43,10 +43,28 @@ class R1Integration {
         if (this.initialized) return true;
 
         try {
-            await this.checkModelAvailability();
+            // Check if Ollama service is running
+            const serviceCheck = await fetch(`${this.ollamaEndpoint}/api/tags`).catch(() => null);
+            if (!serviceCheck) {
+                console.warn('Ollama service not available. Please start Ollama first.');
+                return false;
+            }
+
+            // Check if model is already pulled
+            const response = await fetch(`${this.ollamaEndpoint}/api/tags`);
+            const tags = await response.json();
+            
+            const modelExists = tags.models && tags.models.some(model => 
+                model.name === this.modelName
+            );
+
+            if (!modelExists) {
+                console.warn(`Model ${this.modelName} not found. Please run: ollama pull ${this.modelName}`);
+                return false;
+            }
 
             // Verify model is working
-            console.log('Verifying R1 model...');
+            console.log('Verifying Gemma model...');
             const testResponse = await fetch(`${this.ollamaEndpoint}/api/generate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -58,40 +76,37 @@ class R1Integration {
             });
 
             if (!testResponse.ok) {
-                throw new Error('Model verification failed');
+                console.warn('Model verification failed. Some AI features may be limited.');
+                return false;
             }
 
             this.initialized = true;
-            console.log('R1 model initialized successfully');
+            console.log('Gemma model initialized successfully');
             return true;
         } catch (error) {
-            console.error('Error during R1 initialization:', error);
-            if (error.message.includes('Please run the following command')) {
-                // This is a model not found error, we want to show this message
-                throw error;
-            }
+            console.warn('Error during Gemma initialization:', error);
             return false;
         }
     }
 
     setupIpcHandlers() {
         // Form Analysis
-        ipcMain.handle('r1:analyze-form', async (event, { pageContent, url }) => {
+        ipcMain.handle('gemma:analyze-form', async (event, { pageContent, url }) => {
             return await this.analyzeForm(pageContent, url);
         });
 
         // Form Field Mapping
-        ipcMain.handle('r1:map-fields', async (event, { sourceForm, targetForm }) => {
+        ipcMain.handle('gemma:map-fields', async (event, { sourceForm, targetForm }) => {
             return await this.mapFormFields(sourceForm, targetForm);
         });
 
         // Form Automation Planning
-        ipcMain.handle('r1:plan-automation', async (event, { form, testData }) => {
+        ipcMain.handle('gemma:plan-automation', async (event, { form, testData }) => {
             return await this.planAutomation(form, testData);
         });
 
         // Workflow Optimization
-        ipcMain.handle('r1:optimize-workflow', async (event, { workflow }) => {
+        ipcMain.handle('gemma:optimize-workflow', async (event, { workflow }) => {
             return await this.optimizeWorkflow(workflow);
         });
     }
@@ -100,11 +115,19 @@ class R1Integration {
         if (!this.initialized) {
             const initialized = await this.initialize();
             if (!initialized) {
-                return { success: false, message: 'R1 not initialized' };
+                return { success: false, message: 'Gemma not initialized' };
             }
         }
 
-        const prompt = `Analyze this HTML form and provide a detailed understanding of its structure and purpose.
+        // Check if this is a Zak assistant request
+        const isZakRequest = url && pageContent && pageContent.includes('browser assistant');
+        
+        let prompt;
+        if (isZakRequest) {
+            prompt = pageContent;  // The prompt is passed directly in the pageContent for Zak requests
+        } else {
+            // Original form analysis prompt
+            prompt = `You are an expert in form analysis. Analyze this HTML form and provide a detailed understanding of its structure and purpose.
 
 HTML Content:
 ${pageContent}
@@ -135,6 +158,7 @@ Provide analysis in JSON format:
         "validations": ["validation points"]
     }
 }`;
+        }
 
         try {
             const response = await fetch(`${this.ollamaEndpoint}/api/generate`, {
@@ -152,13 +176,72 @@ Provide analysis in JSON format:
             });
 
             if (!response.ok) {
-                throw new Error('Failed to get response from R1');
+                throw new Error('Failed to get response from Gemma');
             }
 
             const result = await response.json();
+            
+            let parsedResponse;
+            try {
+                // First, try to directly parse the response
+                parsedResponse = JSON.parse(result.response);
+            } catch (e) {
+                console.warn("Failed to parse direct response as JSON, trying to extract JSON from text");
+                
+                // Try to extract JSON from markdown code blocks if present
+                const jsonRegex = /```(?:json)?\s*(\{[\s\S]*?\})\s*```/;
+                const match = result.response.match(jsonRegex);
+                
+                if (match && match[1]) {
+                    try {
+                        parsedResponse = JSON.parse(match[1]);
+                        console.log("Successfully extracted JSON from code block");
+                    } catch (e2) {
+                        console.warn("Failed to parse extracted JSON:", e2);
+                        
+                        // For Zak requests, create a simple response structure
+                        if (isZakRequest) {
+                            parsedResponse = {
+                                action: "RESPOND",
+                                response: "I couldn't process that request properly. " + 
+                                         "Could you try rephrasing your question?",
+                                explanation: "Could not parse response as JSON"
+                            };
+                        } else {
+                            // For form analysis, return the raw text
+                            return {
+                                success: true,
+                                analysis: {
+                                    formPurpose: "Could not parse form",
+                                    raw: result.response
+                                }
+                            };
+                        }
+                    }
+                } else {
+                    // No JSON found in markdown blocks, create simple response
+                    if (isZakRequest) {
+                        parsedResponse = {
+                            action: "RESPOND",
+                            response: result.response,
+                            explanation: "Could not parse response as JSON"
+                        };
+                    } else {
+                        // For form analysis, return the raw text
+                        return {
+                            success: true,
+                            analysis: {
+                                formPurpose: "Could not parse form",
+                                raw: result.response
+                            }
+                        };
+                    }
+                }
+            }
+            
             return {
                 success: true,
-                analysis: JSON.parse(result.response)
+                analysis: parsedResponse
             };
         } catch (error) {
             console.error('Error in form analysis:', error);
@@ -174,7 +257,7 @@ Provide analysis in JSON format:
         if (!this.initialized) {
             const initialized = await this.initialize();
             if (!initialized) {
-                return { success: false, message: 'R1 not initialized' };
+                return { success: false, message: 'Gemma not initialized' };
             }
         }
 
@@ -216,7 +299,7 @@ Provide mapping in JSON format:
             });
 
             if (!response.ok) {
-                throw new Error('Failed to get response from R1');
+                throw new Error('Failed to get response from Gemma');
             }
 
             const result = await response.json();
@@ -238,7 +321,7 @@ Provide mapping in JSON format:
         if (!this.initialized) {
             const initialized = await this.initialize();
             if (!initialized) {
-                return { success: false, message: 'R1 not initialized' };
+                return { success: false, message: 'Gemma not initialized' };
             }
         }
 
@@ -293,7 +376,7 @@ Provide plan in JSON format:
             });
 
             if (!response.ok) {
-                throw new Error('Failed to get response from R1');
+                throw new Error('Failed to get response from Gemma');
             }
 
             const result = await response.json();
@@ -315,7 +398,7 @@ Provide plan in JSON format:
         if (!this.initialized) {
             const initialized = await this.initialize();
             if (!initialized) {
-                return { success: false, message: 'R1 not initialized' };
+                return { success: false, message: 'Gemma not initialized' };
             }
         }
 
@@ -365,7 +448,7 @@ Provide optimization in JSON format:
             });
 
             if (!response.ok) {
-                throw new Error('Failed to get response from R1');
+                throw new Error('Failed to get response from Gemma');
             }
 
             const result = await response.json();
@@ -384,4 +467,5 @@ Provide optimization in JSON format:
     }
 }
 
-module.exports = { R1Integration }; 
+const gemmaInstance = new GemmaIntegration();
+module.exports = gemmaInstance; 

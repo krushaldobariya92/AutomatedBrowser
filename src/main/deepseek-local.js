@@ -1,5 +1,6 @@
 const { ipcMain } = require('electron');
 const fetch = require('node-fetch');
+const { spawn } = require('child_process');
 
 class LocalDeepSeekIntegration {
   constructor() {
@@ -10,65 +11,30 @@ class LocalDeepSeekIntegration {
   }
 
   async initialize() {
-    if (this.initialized) return;
+    if (this.initialized) return true;
 
     try {
-      // First check if Ollama service is running
+      // Check if Ollama service is running
       const serviceCheck = await fetch(`${this.ollamaEndpoint}/api/tags`).catch(() => null);
       if (!serviceCheck) {
         console.warn('Ollama service not available. Please start Ollama first.');
         return false;
       }
 
-      // Check if model exists and pull if needed
-      console.log('Checking model availability...');
-      const modelCheck = await fetch(`${this.ollamaEndpoint}/api/show`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: this.modelName })
-      });
+      // Check if model exists
+      const response = await fetch(`${this.ollamaEndpoint}/api/tags`);
+      const tags = await response.json();
+      
+      const modelExists = tags.models && tags.models.some(model => 
+        model.name === this.modelName
+      );
 
-      if (!modelCheck.ok) {
-        console.log(`Model ${this.modelName} not found locally. Starting download...`);
-        
-        // Start model pull with progress tracking
-        const pullResponse = await fetch(`${this.ollamaEndpoint}/api/pull`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: this.modelName })
-        });
-
-        if (!pullResponse.ok) {
-          throw new Error(`Failed to pull model: ${pullResponse.statusText}`);
-        }
-
-        // Track pull progress
-        const reader = pullResponse.body.getReader();
-        const decoder = new TextDecoder();
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value);
-          try {
-            const progress = JSON.parse(chunk);
-            if (progress.status === 'downloading') {
-              console.log(`Downloading model: ${Math.round(progress.completed / progress.total * 100)}%`);
-            } else if (progress.status === 'processing') {
-              console.log('Processing downloaded files...');
-            }
-          } catch (e) {
-            // Ignore parse errors from incomplete chunks
-          }
-        }
-
-        console.log('Model download completed');
-      } else {
-        console.log(`Model ${this.modelName} is already available`);
+      if (!modelExists) {
+        console.log(`Model ${this.modelName} not found locally. Please run: ollama pull ${this.modelName}`);
+        return false;
       }
 
-      // Verify model is ready by sending a test prompt
+      // Verify model is working
       console.log('Verifying model...');
       const testResponse = await fetch(`${this.ollamaEndpoint}/api/generate`, {
         method: 'POST',
@@ -81,14 +47,15 @@ class LocalDeepSeekIntegration {
       });
 
       if (!testResponse.ok) {
-        throw new Error('Model verification failed');
+        console.warn('Model verification failed. Some AI features may be limited.');
+        return false;
       }
 
       this.initialized = true;
       console.log('DeepSeek model initialized successfully');
       return true;
     } catch (error) {
-      console.error('Error during model initialization:', error);
+      console.warn('Error during model initialization:', error);
       return false;
     }
   }

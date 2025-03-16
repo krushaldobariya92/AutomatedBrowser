@@ -4,243 +4,495 @@
     <meta charset="UTF-8">
     <title>AutomatedBrowser</title>
     <style>
-      body { margin: 0; font-family: Arial; }
-      .container { display: flex; }
-      .tabs { width: 200px; background: #f0f0f0; height: 100vh; overflow-y: auto; }
-      .tab { padding: 10px; border-bottom: 1px solid #ddd; cursor: pointer; }
-      .tab.active { background: #1E3A8A; color: white; }
-      .new-tab-btn { padding: 10px; background: #10B981; color: white; border: none; cursor: pointer; text-align: center; }
-      .content { flex: 1; height: 100vh; }
-      .url-bar-container { display: flex; align-items: center; }
-      .url-bar { flex: 1; padding: 10px; border: none; }
-      .zak-sidebar { width: 300px; background: #fff; height: 100vh; border-left: 1px solid #ddd; display: flex; flex-direction: column; }
-      .zak-messages { flex: 1; padding: 10px; overflow-y: auto; }
-      .zak-input-container { display: flex; padding: 10px; border-top: 1px solid #ddd; }
-      .zak-input { flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
-      .zak-send-btn { padding: 8px 15px; background: #1E3A8A; color: white; border: none; border-radius: 4px; margin-left: 5px; cursor: pointer; }
-      /* Initial state for workflow panel and overlay */
-      #workflow-panel, #workflow-overlay {
-        display: none;
+      :root {
+        --primary-color: #3b82f6;
+        --primary-dark: #1e40af;
+        --primary-light: #dbeafe;
+        --secondary-color: #6366f1;
+        --danger-color: #dc2626;
+        --success-color: #10b981;
+        --warning-color: #f59e0b;
+        --text-color: #1f2937;
+        --text-light: #6b7280;
+        --bg-color: #f9fafb;
+        --border-color: #e5e7eb;
+        --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+        --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        --radius-sm: 4px;
+        --radius-md: 6px;
+        --radius-lg: 8px;
+        --transition: all 0.2s ease-in-out;
+      }
+      
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: var(--font-family);
+        color: var(--text-color);
+        background-color: var(--bg-color);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* Header and navigation */
+      .header {
+        background-color: white;
+        border-bottom: 1px solid var(--border-color);
+        padding: 8px 12px;
+        box-shadow: var(--shadow-sm);
+        z-index: 100;
+      }
+
+      .tabs {
+        display: flex;
+        align-items: center;
+        overflow-x: auto;
+        scrollbar-width: thin;
+        margin-bottom: 8px;
+      }
+
+      .tab {
+        background-color: #f3f4f6;
+        border-radius: var(--radius-sm);
+        padding: 6px 12px;
+        margin-right: 6px;
+        font-size: 13px;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 180px;
+        transition: var(--transition);
+        border: 1px solid transparent;
+        color: var(--text-light);
+      }
+
+      .tab:hover {
+        background-color: #e5e7eb;
+      }
+
+      .tab.active {
+        background-color: white;
+        border-color: var(--primary-color);
+        color: var(--primary-color);
+        font-weight: 500;
+      }
+
+      .new-tab-btn {
+        background-color: transparent;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        padding: 6px 10px;
+        font-size: 13px;
+        cursor: pointer;
+        white-space: nowrap;
+        color: var(--text-light);
+        transition: var(--transition);
+      }
+
+      .new-tab-btn:hover {
+        background-color: var(--primary-light);
+        color: var(--primary-color);
+        border-color: var(--primary-color);
+      }
+
+      .url-bar-container {
+        display: flex;
+        padding: 6px 0;
+      }
+
+      .url-bar {
+        flex: 1;
+        padding: 8px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        font-size: 14px;
+        outline: none;
+        transition: var(--transition);
+      }
+
+      .url-bar:focus {
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 2px var(--primary-light);
+      }
+
+      /* Control buttons */
+      .control-btn {
+        background-color: transparent;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        padding: 8px 12px;
+        margin-left: 8px;
+        cursor: pointer;
+        transition: var(--transition);
+        color: var(--text-light);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .control-btn:hover {
+        background-color: var(--primary-light);
+        color: var(--primary-color);
+        border-color: var(--primary-color);
+      }
+
+      /* Zak UI */
+      .zak-container {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 350px;
+        background-color: white;
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-lg);
+        z-index: 1000;
+        display: flex;
+        flex-direction: column;
+        max-height: 400px;
+        transition: var(--transition);
+        transform: translateY(0);
+        border: 1px solid var(--border-color);
+        overflow: hidden;
+      }
+
+      .zak-header {
+        padding: 12px 16px;
+        background-color: var(--primary-color);
+        color: white;
+        font-weight: 500;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-top-left-radius: var(--radius-lg);
+        border-top-right-radius: var(--radius-lg);
+      }
+
+      .zak-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: 300px;
+      }
+
+      .zak-messages div {
+        padding: 8px 12px;
+        border-radius: var(--radius-md);
+        font-size: 14px;
+        max-width: 85%;
+        word-break: break-word;
+      }
+
+      .zak-messages div:nth-child(odd) {
+        background-color: var(--primary-light);
+        color: var(--primary-dark);
+        align-self: flex-start;
+      }
+
+      .zak-messages div:nth-child(even) {
+        background-color: #f3f4f6;
+        align-self: flex-end;
+      }
+
+      .zak-input-container {
+        display: flex;
+        padding: 12px 16px;
+        border-top: 1px solid var(--border-color);
+      }
+
+      .zak-input {
+        flex: 1;
+        padding: 8px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        font-size: 14px;
+        outline: none;
+        transition: var(--transition);
+      }
+
+      .zak-input:focus {
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 2px var(--primary-light);
+      }
+
+      .zak-send-btn {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        border-radius: var(--radius-md);
+        padding: 8px 16px;
+        margin-left: 8px;
+        cursor: pointer;
+        transition: var(--transition);
+        font-weight: 500;
+      }
+
+      .zak-send-btn:hover {
+        background-color: var(--primary-dark);
+      }
+
+      /* Main content */
+      .content {
+        flex: 1;
+        position: relative;
+      }
+
+      webview {
+        border: none;
+        width: 100%;
+        height: 100%;
+      }
+      
+      /* Panel styling (for workflows and templates) */
+      .panel-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 999;
+        backdrop-filter: blur(3px);
+      }
+      
+      .panel {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background-color: white;
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-lg);
+        padding: 24px;
+        z-index: 1000;
+        max-width: 800px;
+        width: 90%;
+        max-height: 80vh;
+        overflow-y: auto;
+      }
+      
+      .panel-header {
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      
+      .panel-title {
+        font-size: 20px;
+        font-weight: 600;
+        color: var(--primary-dark);
+      }
+      
+      .panel-close {
+        background: transparent;
+        border: none;
+        font-size: 20px;
+        cursor: pointer;
+        color: var(--text-light);
+        transition: var(--transition);
+      }
+      
+      .panel-close:hover {
+        color: var(--danger-color);
+      }
+      
+      .panel-section {
+        margin-bottom: 20px;
+      }
+      
+      .panel-input {
+        padding: 8px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        font-size: 14px;
+        width: 100%;
+        margin-bottom: 12px;
+      }
+      
+      .panel-button {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        border-radius: var(--radius-md);
+        padding: 8px 16px;
+        cursor: pointer;
+        transition: var(--transition);
+        font-weight: 500;
+      }
+      
+      .panel-button:hover {
+        background-color: var(--primary-dark);
+      }
+      
+      .panel-button.danger {
+        background-color: var(--danger-color);
+      }
+      
+      .panel-button.danger:hover {
+        background-color: #b91c1c;
+      }
+      
+      .panel-button.success {
+        background-color: var(--success-color);
+      }
+      
+      .panel-button.success:hover {
+        background-color: #059669;
+      }
+      
+      /* Animations */
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      
+      @keyframes slideUp {
+        from { transform: translateY(20px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+      }
+      
+      .fade-in {
+        animation: fadeIn 0.3s ease-out;
+      }
+      
+      .slide-up {
+        animation: slideUp 0.3s ease-out;
       }
     </style>
   </head>
   <body>
-    <div class="container">
+    <div class="header">
       <div class="tabs" id="tabs">
         <button class="new-tab-btn" id="newTabBtn">+ New Tab</button>
       </div>
-      <div class="content">
-        <div class="url-bar-container">
-          <input type="text" class="url-bar" id="urlBar" placeholder="Enter URL">
-          <button id="workflow-btn" title="Manage Workflows" style="background: #1E3A8A; color: white; border: none; border-radius: 4px; padding: 8px 12px; margin-left: 5px; cursor: pointer;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-              <path d="M6 2a.5.5 0 0 1 .47.33L10 12.036l1.53-4.208A.5.5 0 0 1 12 7.5h3.5a.5.5 0 0 1 0 1h-3.15l-1.88 5.17a.5.5 0 0 1-.94 0L6 3.964 4.47 8.172A.5.5 0 0 1 4 8.5H.5a.5.5 0 0 1 0-1h3.15l1.88-5.17A.5.5 0 0 1 6 2Z"/>
-            </svg>
-          </button>
-        </div>
-        <webview id="webview" src="https://duckduckgo.com" style="width: 100%; height: calc(100% - 40px);" 
-          nodeintegration 
-          webpreferences="contextIsolation=false"
-          allowpopups
-          preload="./preload.js"
-          partition="persist:main"></webview>
-      </div>
-      <div class="zak-sidebar">
-        <div class="zak-messages" id="zakMessages">
-          <div>Zak: Waiting for your command...</div>
-        </div>
-        <div class="zak-input-container">
-          <input type="text" class="zak-input" id="zakInput" placeholder="Type your message to Zak...">
-          <button class="zak-send-btn" id="zakSendBtn">Send</button>
-        </div>
+      <div class="url-bar-container">
+        <input type="text" class="url-bar" id="urlBar" placeholder="Enter URL">
+        <button id="workflow-btn" class="control-btn" title="Manage Workflows">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M6 2a.5.5 0 0 1 .47.33L10 12.036l1.53-4.208A.5.5 0 0 1 12 7.5h3.5a.5.5 0 0 1 0 1h-3.15l-1.88 5.17a.5.5 0 0 1-.94 0L6 3.964 4.47 8.172A.5.5 0 0 1 4 8.5H.5a.5.5 0 0 1 0-1h3.15l1.88-5.17A.5.5 0 0 1 6 2Z"/>
+          </svg>
+        </button>
+        <button id="template-btn" class="control-btn" title="Form Templates">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M1.5 2.5A1.5 1.5 0 0 1 3 1h10a1.5 1.5 0 0 1 1.5 1.5v3.563a2 2 0 0 1 0 3.874V13.5A1.5 1.5 0 0 1 13 15H3a1.5 1.5 0 0 1-1.5-1.5V9.937a2 2 0 0 1 0-3.874V2.5zm1 3.563a2 2 0 0 1 0 3.874V13.5a.5.5 0 0 0 .5.5h10a.5.5 0 0 0 .5-.5V9.937a2 2 0 0 1 0-3.874V2.5A.5.5 0 0 0 13 2H3a.5.5 0 0 0-.5.5v3.563zM2 7a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm12 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/>
+          </svg>
+        </button>
+        <button id="gemma-btn" class="control-btn" title="Gemma Assistant">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M6 12.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 1-.5-.5ZM3 8.062C3 6.76 4.235 5.765 5.53 5.886a26.58 26.58 0 0 0 4.94 0C11.765 5.765 13 6.76 13 8.062v1.157a.933.933 0 0 1-.765.935c-.845.147-2.34.346-4.235.346-1.895 0-3.39-.2-4.235-.346A.933.933 0 0 1 3 9.219V8.062Zm4.542-.827a.25.25 0 0 0-.217.068l-.92.9a24.767 24.767 0 0 1-1.871-.183.25.25 0 0 0-.068.495c.55.076 1.232.149 2.02.193a.25.25 0 0 0 .189-.071l.754-.736.847 1.71a.25.25 0 0 0 .404.062l.932-.97a25.286 25.286 0 0 0 1.922-.188.25.25 0 0 0-.068-.495c-.538.074-1.207.145-1.98.189a.25.25 0 0 0-.166.076l-.754.785-.842-1.7a.25.25 0 0 0-.182-.135Z"/>
+            <path d="M8.5 1.866a1 1 0 1 0-1 0V3h-2A4.5 4.5 0 0 0 1 7.5V8a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1v1a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1v-.5A4.5 4.5 0 0 0 10.5 3h-2V1.866ZM14 7.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7.5A3.5 3.5 0 0 1 5.5 4h5A3.5 3.5 0 0 1 14 7.5Z"/>
+          </svg>
+        </button>
       </div>
     </div>
+    
+    <div class="content">
+      <webview id="webview" src="https://duckduckgo.com/" style="width: 100%; height: calc(100% - 40px);" nodeintegration webpreferences="contextIsolation=false" allowpopups preload="./preload.js" partition="persist:main"></webview>
+    </div>
+    
+    <div class="zak-container">
+      <div class="zak-header">
+        <div>Zak Assistant</div>
+        <button id="toggle-zak" class="toggle-zak" style="background: none; border: none; color: white; cursor: pointer;">—</button>
+      </div>
+      <div class="zak-messages" id="zakMessages"></div>
+      <div class="zak-input-container">
+        <input type="text" class="zak-input" id="zakInput" placeholder="Type your message to Zak...">
+        <button class="zak-send-btn" id="zakSendBtn">Send</button>
+      </div>
+    </div>
+
     <script src="tabs-ui.js"></script>
     <script src="zak-ui.js"></script>
-    <script src="workflows-ui.js"></script>
     <script src="form-templates-ui.js"></script>
+    <script src="workflows-ui.js"></script>
+    <script src="gemma-ui.js"></script>
     <script>
-      // Add event listeners for webview navigation
+      // Initialize Form Templates
       document.addEventListener('DOMContentLoaded', () => {
-        const webview = document.getElementById('webview');
-        const urlBar = document.getElementById('urlBar');
-        const zakMessages = document.getElementById('zakMessages');
-        const workflowBtn = document.getElementById('workflow-btn');
+        console.log('Initializing form templates presenter');
+        const FormTemplates = new FormTemplatesPresenter();
+        FormTemplates.initialize();
         
-        // Initialize form templates presenter
-        if (typeof formTemplatesPresenter === 'object' && typeof formTemplatesPresenter.initialize === 'function') {
-          console.log('Initializing form templates presenter');
-          formTemplatesPresenter.initialize().catch(error => {
-            console.error('Error initializing form templates presenter:', error);
-          });
-        } else {
-          console.warn('Form templates presenter not found or initialize method not available');
-        }
-        
-        // Set up workflow button
-        if (workflowBtn) {
-          workflowBtn.addEventListener('click', () => {
-            if (typeof showWorkflowPanel === 'function') {
-              showWorkflowPanel();
-            } else {
-              console.error('showWorkflowPanel function not found');
-            }
-          });
-        }
-        
-        // Function to update Zak's messages
-        function updateZakMessage(message) {
-          if (zakMessages) {
-            const messageElement = document.createElement('div');
-            messageElement.textContent = `Zak: ${message}`;
-            zakMessages.appendChild(messageElement);
-            // Scroll to the bottom to show the latest message
-            zakMessages.scrollTop = zakMessages.scrollHeight;
+        // Manual initialization for components that might be loaded after DOMContentLoaded
+        document.getElementById('template-btn')?.addEventListener('click', () => {
+          if (FormTemplates.showTemplatePanel) {
+            FormTemplates.showTemplatePanel();
           }
-        }
+        });
         
-        if (webview) {
-          // Listen for messages from the preload script
-          webview.addEventListener('ipc-message', (event) => {
-            console.log('IPC message received:', event.channel, event.args[0]);
-            
-            if (event.channel === 'page-loaded') {
-              const { title, url } = event.args[0];
-              
-              // Update URL bar
-              if (urlBar) urlBar.value = url;
-              
-              // Update active tab
-              if (window.tabs) {
-                const activeTabIndex = window.tabs.findIndex(t => t.active);
-                if (activeTabIndex !== -1) {
-                  window.tabs[activeTabIndex].url = url;
-                  window.tabs[activeTabIndex].title = title || url;
-                  if (typeof window.renderTabs === 'function') {
-                    window.renderTabs();
-                  }
-                }
-              }
-              
-              // Update Zak message
-              updateZakMessage('Page loaded successfully!');
-            }
-            
-            // Handle search submissions
-            if (event.channel === 'search-submitted') {
-              const { query, url } = event.args[0];
-              console.log('Search submitted:', query, url);
-              
-              // Update URL bar
-              if (urlBar) urlBar.value = url;
-              
-              // Update Zak message
-              updateZakMessage(`Searching for "${query}"...`);
-              
-              // Allow the navigation to proceed
-              // The form will submit normally in the webview
-            }
-            
-            // Handle link clicks
-            if (event.channel === 'link-clicked') {
-              const { url } = event.args[0];
-              console.log('Link clicked:', url);
-              
-              // Update URL bar
-              if (urlBar) urlBar.value = url;
-              
-              // Update Zak message
-              updateZakMessage(`Navigating to ${url}...`);
-              
-              // Allow the navigation to proceed
-              // The link will be followed normally in the webview
-            }
-          });
+        // Setup workflow panel button
+        document.getElementById('workflow-btn')?.addEventListener('click', () => {
+          window.electron?.ipcRenderer.send('show-workflow-panel');
+        });
+        
+        // Setup Gemma button
+        document.getElementById('gemma-btn')?.addEventListener('click', () => {
+          if (window.gemmaUI && window.gemmaUI.showPanel) {
+            window.gemmaUI.showPanel();
+          }
+        });
+        
+        // Toggle Zak panel
+        document.getElementById('toggle-zak')?.addEventListener('click', () => {
+          const zakContainer = document.querySelector('.zak-container');
+          const zakMessages = document.getElementById('zakMessages');
+          const zakInputContainer = document.querySelector('.zak-input-container');
           
-          // Update URL bar when navigation happens within webview
-          webview.addEventListener('did-navigate', (e) => {
-            console.log('Webview navigated to:', e.url);
-            urlBar.value = e.url;
-            
-            // Update active tab URL
-            if (window.tabs) {
-              window.tabs = window.tabs.map(t => (t.active ? { ...t, url: e.url } : t));
-              if (typeof window.renderTabs === 'function') {
-                window.renderTabs();
-              }
-            }
-            
-            // Update Zak message
-            updateZakMessage('Loading page...');
-          });
-          
-          // Handle navigation within the page (like form submissions)
-          webview.addEventListener('will-navigate', (e) => {
-            console.log('Webview will navigate to:', e.url);
-            // Update URL bar
-            urlBar.value = e.url;
-            // Allow the navigation to proceed
-          });
-          
-          // Handle redirects
-          webview.addEventListener('did-redirect-navigation', (e) => {
-            console.log('Webview redirected to:', e.url);
-            urlBar.value = e.url;
-            
-            // Update active tab URL
-            if (window.tabs) {
-              window.tabs = window.tabs.map(t => (t.active ? { ...t, url: e.url } : t));
-              if (typeof window.renderTabs === 'function') {
-                window.renderTabs();
-              }
-            }
-            
-            // Update Zak message
-            updateZakMessage(`Redirected to ${e.url}...`);
-          });
-          
-          // Handle page load finished
-          webview.addEventListener('did-finish-load', () => {
+          if (zakMessages.style.display === 'none') {
+            zakMessages.style.display = 'flex';
+            zakInputContainer.style.display = 'flex';
+            zakContainer.style.height = 'auto';
+            document.getElementById('toggle-zak').textContent = '—';
+          } else {
+            zakMessages.style.display = 'none';
+            zakInputContainer.style.display = 'none';
+            zakContainer.style.height = 'auto';
+            document.getElementById('toggle-zak').textContent = '+';
+          }
+        });
+        
+        // Message handlers
+        window.electron?.ipcRenderer.on('page-loaded', (data) => {
+          console.log('IPC message received: page-loaded', data);
+        });
+        
+        window.electron?.ipcRenderer.on('show-workflow-panel', () => {
+          if (window.showWorkflowPanel) {
+            window.showWorkflowPanel();
+          }
+        });
+        
+        window.electron?.ipcRenderer.on('show-template-panel', () => {
+          if (FormTemplates.showTemplatePanel) {
+            FormTemplates.showTemplatePanel();
+          }
+        });
+        
+        // Initialize webview events
+        const webviewElement = document.getElementById('webview');
+        if (webviewElement) {
+          webviewElement.addEventListener('did-finish-load', () => {
             console.log('Webview finished loading');
-            // Update Zak message
-            updateZakMessage('Page loaded successfully!');
+          });
+          
+          webviewElement.addEventListener('did-fail-load', (e) => {
+            console.error('Webview failed to load:', e);
           });
         }
       });
-      
-      // Handle IPC messages from main process
-      if (typeof window !== 'undefined' && window.electron && window.electron.ipcRenderer) {
-        window.electron.ipcRenderer.on('show-workflow-panel', () => {
-          if (typeof showWorkflowPanel === 'function') {
-            showWorkflowPanel();
-          }
-        });
-        
-        window.electron.ipcRenderer.on('show-template-panel', () => {
-          if (typeof formTemplatesPresenter === 'object' && formTemplatesPresenter.showTemplatePanel) {
-            formTemplatesPresenter.showTemplatePanel();
-          }
-        });
-        
-        window.electron.ipcRenderer.on('start-recording', () => {
-          if (typeof startCapturingActions === 'function') {
-            // Prompt for workflow name
-            const workflowName = prompt('Enter a name for the workflow:');
-            if (workflowName) {
-              document.getElementById('workflow-name').value = workflowName;
-              startCapturingActions();
-            }
-          }
-        });
-        
-        window.electron.ipcRenderer.on('stop-recording', () => {
-          if (typeof stopCapturingActions === 'function') {
-            stopCapturingActions();
-          }
-        });
-      } else {
-        console.warn('window.electron or ipcRenderer not available, IPC message handlers not registered');
-      }
     </script>
   </body>
 </html>

@@ -26,4 +26,27 @@ contextBridge.exposeInMainWorld(
   }
 );
 
+// Expose Gemma functionality to the renderer process
+contextBridge.exposeInMainWorld('gemma', {
+  // Form Analysis
+  analyzeForm: async (pageContent, url) => {
+    return await ipcRenderer.invoke('gemma:analyze-form', { pageContent, url });
+  },
+  
+  // Form Field Mapping
+  mapFormFields: async (sourceForm, targetForm) => {
+    return await ipcRenderer.invoke('gemma:map-fields', { sourceForm, targetForm });
+  },
+  
+  // Form Automation Planning
+  planAutomation: async (form, testData) => {
+    return await ipcRenderer.invoke('gemma:plan-automation', { form, testData });
+  },
+  
+  // Workflow Optimization
+  optimizeWorkflow: async (workflow) => {
+    return await ipcRenderer.invoke('gemma:optimize-workflow', { workflow });
+  }
+});
+
 console.log('Main window preload script loaded'); 

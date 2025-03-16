@@ -6,8 +6,8 @@ const fs = require('fs');
 const url = require('url');
 const formTemplates = require('./src/main/form-templates');
 const deepseek = require('./src/main/deepseek-local');
-const workflows = require('./src/main/workflows');
-const r1 = require('./src/zak/r1');
+const gemma = require('./src/zak/gemma');
+const workflowsModule = require('./src/main/workflows');
 
 // Global reference to the main window
 let win;
@@ -145,276 +145,243 @@ if (fs.existsSync(workflowsPath)) {
   console.error('Workflows module not found at:', workflowsPath);
 }
 
+// Initialize workflows
 try {
-  const workflows = require('./src/main/workflows');
+  workflowsModule.initialize();
   console.log('Workflows module imported successfully');
 } catch (error) {
   console.error('Error importing workflows module:', error);
-}
-
-// Enable webview support
-app.commandLine.appendSwitch('enable-features', 'WebViewTag');
-
-// Handle creating/removing shortcuts on Windows when installing/uninstalling
-if (require('electron-squirrel-startup')) {
-  app.quit();
-}
-
-// Initialize workflows directly to avoid module loading issues
-const workflows = {
-  initialize: () => {
-    console.log('Initializing workflows directly');
+  // Fallback to direct initialization if module fails to load
+  const workflowsDir = path.join(__dirname, 'data');
+  console.log('Workflows directory:', workflowsDir);
+  
+  // Ensure data directory exists
+  if (!fs.existsSync(workflowsDir)) {
+    console.log('Creating workflow directory');
+    fs.mkdirSync(workflowsDir, { recursive: true });
+  }
+  
+  let isRecording = false;
+  let currentWorkflow = [];
+  let workflowName = '';
+  let activeWorkflows = {};
+  let scheduledWorkflows = {};
+  
+  // Helper function to schedule workflow execution
+  function scheduleWorkflow(workflow, schedule) {
+    const workflowId = workflow.id;
     
-    // Path to store workflows
-    const workflowsDir = path.join(__dirname, 'data');
-    console.log('Workflows directory:', workflowsDir);
-    
-    // Ensure data directory exists
-    if (!fs.existsSync(workflowsDir)) {
-      console.log('Creating workflow directory');
-      fs.mkdirSync(workflowsDir, { recursive: true });
+    // Clear any existing schedule for this workflow
+    if (scheduledWorkflows[workflowId]) {
+      clearTimeout(scheduledWorkflows[workflowId].timeout);
+      delete scheduledWorkflows[workflowId];
     }
     
-    let isRecording = false;
-    let currentWorkflow = [];
-    let workflowName = '';
-    let activeWorkflows = {};
-    let scheduledWorkflows = {};
+    // Calculate next run time
+    let nextRun;
+    if (schedule.type === 'once') {
+      nextRun = new Date(schedule.datetime).getTime();
+    } else if (schedule.type === 'recurring') {
+      // For recurring schedules, calculate next occurrence
+      nextRun = calculateNextRun(schedule);
+    }
     
-    // Helper function to schedule workflow execution
-    function scheduleWorkflow(workflow, schedule) {
-      const workflowId = workflow.id;
+    if (nextRun <= Date.now()) {
+      console.log('Schedule is in the past, not scheduling');
+      return false;
+    }
+    
+    // Schedule the workflow
+    const timeout = setTimeout(async () => {
+      console.log(`Executing scheduled workflow: ${workflow.name}`);
       
-      // Clear any existing schedule for this workflow
-      if (scheduledWorkflows[workflowId]) {
-        clearTimeout(scheduledWorkflows[workflowId].timeout);
-        delete scheduledWorkflows[workflowId];
-      }
-      
-      // Calculate next run time
-      let nextRun;
-      if (schedule.type === 'once') {
-        nextRun = new Date(schedule.datetime).getTime();
-      } else if (schedule.type === 'recurring') {
-        // For recurring schedules, calculate next occurrence
-        nextRun = calculateNextRun(schedule);
-      }
-      
-      if (nextRun <= Date.now()) {
-        console.log('Schedule is in the past, not scheduling');
-        return false;
-      }
-      
-      // Schedule the workflow
-      const timeout = setTimeout(async () => {
-        console.log(`Executing scheduled workflow: ${workflow.name}`);
+      try {
+        // Run the workflow
+        activeWorkflows[workflowId] = {
+          id: workflowId,
+          name: workflow.name,
+          currentStep: 0,
+          steps: workflow.steps,
+          startedAt: Date.now()
+        };
         
-        try {
-          // Run the workflow
-          activeWorkflows[workflowId] = {
-            id: workflowId,
-            name: workflow.name,
-            currentStep: 0,
-            steps: workflow.steps,
-            startedAt: Date.now()
-          };
-          
-          // If recurring, schedule next run
-          if (schedule.type === 'recurring') {
-            scheduleWorkflow(workflow, schedule);
-          }
-          
-          // Update last run timestamp
-          const workflowsFile = path.join(workflowsDir, 'workflows.json');
-          const workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
-          workflows[workflow.name].lastRun = Date.now();
-          fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
-        } catch (error) {
-          console.error('Error executing scheduled workflow:', error);
+        // If recurring, schedule next run
+        if (schedule.type === 'recurring') {
+          scheduleWorkflow(workflow, schedule);
         }
-      }, nextRun - Date.now());
+        
+        // Update last run timestamp
+        const workflowData = JSON.parse(fs.readFileSync(path.join(workflowsDir, 'workflows.json'), 'utf8')) || {};
+        workflowData[workflow.name].lastRun = Date.now();
+        fs.writeFileSync(path.join(workflowsDir, 'workflows.json'), JSON.stringify(workflowData, null, 2), 'utf8');
+      } catch (error) {
+        console.error('Error executing scheduled workflow:', error);
+      }
+    }, nextRun - Date.now());
+    
+    scheduledWorkflows[workflowId] = {
+      workflow,
+      schedule,
+      timeout,
+      nextRun
+    };
+    
+    return true;
+  }
+  
+  // Helper function to calculate next run time for recurring schedules
+  function calculateNextRun(schedule) {
+    const now = Date.now();
+    let nextRun = new Date();
+    
+    switch (schedule.interval) {
+      case 'hourly':
+        nextRun.setHours(nextRun.getHours() + 1);
+        nextRun.setMinutes(schedule.minute || 0);
+        nextRun.setSeconds(0);
+        break;
       
-      scheduledWorkflows[workflowId] = {
-        workflow,
-        schedule,
-        timeout,
-        nextRun
-      };
+      case 'daily':
+        nextRun.setDate(nextRun.getDate() + 1);
+        nextRun.setHours(schedule.hour || 0);
+        nextRun.setMinutes(schedule.minute || 0);
+        nextRun.setSeconds(0);
+        break;
       
-      return true;
+      case 'weekly':
+        const targetDay = schedule.dayOfWeek || 0;
+        const currentDay = nextRun.getDay();
+        const daysToAdd = (targetDay + 7 - currentDay) % 7;
+        nextRun.setDate(nextRun.getDate() + daysToAdd);
+        nextRun.setHours(schedule.hour || 0);
+        nextRun.setMinutes(schedule.minute || 0);
+        nextRun.setSeconds(0);
+        break;
+      
+      case 'monthly':
+        nextRun.setMonth(nextRun.getMonth() + 1);
+        nextRun.setDate(schedule.dayOfMonth || 1);
+        nextRun.setHours(schedule.hour || 0);
+        nextRun.setMinutes(schedule.minute || 0);
+        nextRun.setSeconds(0);
+        break;
     }
     
-    // Helper function to calculate next run time for recurring schedules
-    function calculateNextRun(schedule) {
-      const now = Date.now();
-      let nextRun = new Date();
-      
+    // If next run is in the past, add one more interval
+    while (nextRun.getTime() <= now) {
       switch (schedule.interval) {
         case 'hourly':
           nextRun.setHours(nextRun.getHours() + 1);
-          nextRun.setMinutes(schedule.minute || 0);
-          nextRun.setSeconds(0);
           break;
-          
         case 'daily':
           nextRun.setDate(nextRun.getDate() + 1);
-          nextRun.setHours(schedule.hour || 0);
-          nextRun.setMinutes(schedule.minute || 0);
-          nextRun.setSeconds(0);
           break;
-          
         case 'weekly':
-          const targetDay = schedule.dayOfWeek || 0;
-          const currentDay = nextRun.getDay();
-          const daysToAdd = (targetDay + 7 - currentDay) % 7;
-          nextRun.setDate(nextRun.getDate() + daysToAdd);
-          nextRun.setHours(schedule.hour || 0);
-          nextRun.setMinutes(schedule.minute || 0);
-          nextRun.setSeconds(0);
+          nextRun.setDate(nextRun.getDate() + 7);
           break;
-          
         case 'monthly':
           nextRun.setMonth(nextRun.getMonth() + 1);
-          nextRun.setDate(schedule.dayOfMonth || 1);
-          nextRun.setHours(schedule.hour || 0);
-          nextRun.setMinutes(schedule.minute || 0);
-          nextRun.setSeconds(0);
           break;
       }
-      
-      // If next run is in the past, add one more interval
-      while (nextRun.getTime() <= now) {
-        switch (schedule.interval) {
-          case 'hourly':
-            nextRun.setHours(nextRun.getHours() + 1);
-            break;
-          case 'daily':
-            nextRun.setDate(nextRun.getDate() + 1);
-            break;
-          case 'weekly':
-            nextRun.setDate(nextRun.getDate() + 7);
-            break;
-          case 'monthly':
-            nextRun.setMonth(nextRun.getMonth() + 1);
-            break;
-        }
-      }
-      
-      return nextRun.getTime();
     }
     
-    // Set up IPC handlers
-    ipcMain.handle('workflow:startRecording', (event, name) => {
-      console.log('IPC: Start recording workflow', name);
-      
-      if (isRecording) {
-        return { success: false, message: 'Already recording a workflow' };
-      }
-      
-      if (!name) {
-        return { success: false, message: 'Workflow name is required' };
-      }
-      
-      // Reset current workflow
-      currentWorkflow = [];
-      workflowName = name;
-      isRecording = true;
-      
-      return { success: true, message: `Started recording workflow: ${name}` };
-    });
+    return nextRun.getTime();
+  }
+  
+  // Set up IPC handlers
+  ipcMain.handle('workflow:startRecording', (event, name) => {
+    console.log('IPC: Start recording workflow', name);
     
-    ipcMain.handle('workflow:stopRecording', async (event) => {
-      console.log('IPC: Stop recording workflow');
-      
-      if (!isRecording) {
-        return { success: false, message: 'Not currently recording a workflow' };
-      }
-      
-      isRecording = false;
-      
-      if (currentWorkflow.length === 0) {
-        return { success: false, message: 'No steps recorded' };
-      }
-      
-      try {
-        // Save workflow to file
-        const workflowsFile = path.join(workflowsDir, 'workflows.json');
-        let workflows = {};
-        
-        if (fs.existsSync(workflowsFile)) {
-          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
-        }
-        
-        // Generate a unique ID for the workflow
-        const workflowId = Date.now().toString();
-        
-        workflows[workflowName] = {
-          id: workflowId,
-          name: workflowName,
-          steps: currentWorkflow,
-          createdAt: Date.now()
-        };
-        
-        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
-        
-        return { success: true, message: `Saved workflow: ${workflowName} with ${currentWorkflow.length} steps` };
-      } catch (error) {
-        console.error('Error saving workflow:', error);
-        return { success: false, message: `Error saving workflow: ${error.message}` };
-      }
-    });
+    if (isRecording) {
+      return { success: false, message: 'Already recording a workflow' };
+    }
     
-    ipcMain.handle('workflow:recordStep', (event, step) => {
-      console.log('IPC: Record step', step.type);
-      if (!isRecording) {
-        return { success: false, message: 'Not currently recording' };
-      }
+    if (!name) {
+      return { success: false, message: 'Workflow name is required' };
+    }
+    
+    // Reset current workflow
+    currentWorkflow = [];
+    workflowName = name;
+    isRecording = true;
+    
+    return { success: true, message: `Started recording workflow: ${name}` };
+  });
+  
+  ipcMain.handle('workflow:stopRecording', async (event) => {
+    console.log('IPC: Stop recording workflow');
+    
+    if (!isRecording) {
+      return { success: false, message: 'Not currently recording a workflow' };
+    }
+    
+    isRecording = false;
+    
+    if (currentWorkflow.length === 0) {
+      return { success: false, message: 'No steps recorded' };
+    }
+    
+    try {
+      // Save workflow to file
+      const workflowData = JSON.parse(fs.readFileSync(path.join(workflowsDir, 'workflows.json'), 'utf8')) || {};
       
-      // Add timestamp to the step
-      step.timestamp = Date.now();
-      currentWorkflow.push(step);
+      // Generate a unique ID for the workflow
+      const workflowId = Date.now().toString();
       
-      return { 
-        success: true, 
-        message: 'Step recorded',
-        step
+      workflowData[workflowName] = {
+        id: workflowId,
+        name: workflowName,
+        steps: currentWorkflow,
+        createdAt: Date.now()
       };
-    });
+      
+      fs.writeFileSync(path.join(workflowsDir, 'workflows.json'), JSON.stringify(workflowData, null, 2), 'utf8');
+      
+      return { success: true, message: `Saved workflow: ${workflowName} with ${currentWorkflow.length} steps` };
+    } catch (error) {
+      console.error('Error saving workflow:', error);
+      return { success: false, message: `Error saving workflow: ${error.message}` };
+    }
+  });
+  
+  ipcMain.handle('workflow:recordStep', (event, step) => {
+    console.log('IPC: Record step', step.type);
+    if (!isRecording) {
+      return { success: false, message: 'Not currently recording' };
+    }
     
-    ipcMain.handle('workflow:getWorkflows', () => {
-      console.log('IPC: Get workflows');
-      const workflowsFile = path.join(workflowsDir, 'workflows.json');
-      
-      try {
-        if (fs.existsSync(workflowsFile)) {
-          return JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
-        }
-      } catch (error) {
-        console.error('Error loading workflows:', error);
-      }
-      
+    // Add timestamp to the step
+    step.timestamp = Date.now();
+    currentWorkflow.push(step);
+    
+    return { 
+      success: true, 
+      message: 'Step recorded',
+      step
+    };
+  });
+  
+  ipcMain.handle('workflow:getWorkflows', () => {
+    console.log('IPC: Get workflows');
+    try {
+      const workflowData = JSON.parse(fs.readFileSync(path.join(workflowsDir, 'workflows.json'), 'utf8')) || {};
+      return workflowData;
+    } catch (error) {
+      console.error('Error loading workflows:', error);
       return {};
-    });
-    
-    ipcMain.handle('workflow:runWorkflow', (event, name) => {
-      console.log('IPC: Run workflow', name);
-      const workflowsFile = path.join(workflowsDir, 'workflows.json');
-      let workflows = {};
+    }
+  });
+  
+  ipcMain.handle('workflow:runWorkflow', (event, name) => {
+    console.log('IPC: Run workflow', name);
+    try {
+      const workflowData = JSON.parse(fs.readFileSync(path.join(workflowsDir, 'workflows.json'), 'utf8')) || {};
       
-      try {
-        if (fs.existsSync(workflowsFile)) {
-          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
-        }
-      } catch (error) {
-        console.error('Error loading workflows:', error);
-        return { success: false, message: 'Error loading workflows' };
-      }
-      
-      if (!workflows[name]) {
+      if (!workflowData[name]) {
         return { success: false, message: `Workflow not found: ${name}` };
       }
       
-      const workflow = workflows[name];
+      const workflow = workflowData[name];
       const workflowId = workflow.id;
       
       // Don't run the same workflow multiple times
@@ -431,107 +398,83 @@ const workflows = {
       };
       
       // Update last run timestamp
-      workflows[name].lastRun = Date.now();
-      try {
-        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
-      } catch (error) {
-        console.error('Error updating workflow last run time:', error);
-      }
+      workflowData[name].lastRun = Date.now();
+      fs.writeFileSync(path.join(workflowsDir, 'workflows.json'), JSON.stringify(workflowData, null, 2), 'utf8');
       
       return { 
         success: true, 
         message: `Started workflow: ${name}`,
         workflowId
       };
-    });
+    } catch (error) {
+      console.error('Error running workflow:', error);
+      return { success: false, message: `Error running workflow: ${error.message}` };
+    }
+  });
+  
+  ipcMain.handle('workflow:getNextStep', (event, workflowId) => {
+    console.log('IPC: Get next step for workflow', workflowId);
+    if (!activeWorkflows[workflowId]) {
+      return { success: false, message: 'Workflow not found or not running' };
+    }
     
-    ipcMain.handle('workflow:getNextStep', (event, workflowId) => {
-      console.log('IPC: Get next step for workflow', workflowId);
-      if (!activeWorkflows[workflowId]) {
-        return { success: false, message: 'Workflow not found or not running' };
-      }
-      
-      const workflow = activeWorkflows[workflowId];
-      
-      if (workflow.currentStep >= workflow.steps.length) {
-        // Workflow is complete
-        delete activeWorkflows[workflowId];
-        return { success: true, complete: true, message: 'Workflow complete' };
-      }
-      
-      const step = workflow.steps[workflow.currentStep];
-      workflow.currentStep++;
-      
-      return { 
-        success: true, 
-        complete: false,
-        step,
-        currentStep: workflow.currentStep,
-        totalSteps: workflow.steps.length
-      };
-    });
+    const workflow = activeWorkflows[workflowId];
     
-    ipcMain.handle('workflow:deleteWorkflow', (event, name) => {
-      console.log('IPC: Delete workflow', name);
-      const workflowsFile = path.join(workflowsDir, 'workflows.json');
-      let workflows = {};
+    if (workflow.currentStep >= workflow.steps.length) {
+      // Workflow is complete
+      delete activeWorkflows[workflowId];
+      return { success: true, complete: true, message: 'Workflow complete' };
+    }
+    
+    const step = workflow.steps[workflow.currentStep];
+    workflow.currentStep++;
+    
+    return { 
+      success: true, 
+      complete: false,
+      step,
+      currentStep: workflow.currentStep,
+      totalSteps: workflow.steps.length
+    };
+  });
+  
+  ipcMain.handle('workflow:deleteWorkflow', (event, name) => {
+    console.log('IPC: Delete workflow', name);
+    try {
+      const workflowData = JSON.parse(fs.readFileSync(path.join(workflowsDir, 'workflows.json'), 'utf8')) || {};
       
-      try {
-        if (fs.existsSync(workflowsFile)) {
-          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
-        }
-      } catch (error) {
-        console.error('Error loading workflows:', error);
-        return { success: false, message: 'Error loading workflows' };
-      }
-      
-      if (!workflows[name]) {
+      if (!workflowData[name]) {
         return { success: false, message: `Workflow not found: ${name}` };
       }
       
-      delete workflows[name];
+      delete workflowData[name];
       
-      try {
-        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
-      } catch (error) {
-        console.error('Error saving workflows after delete:', error);
-        return { success: false, message: `Error deleting workflow: ${error.message}` };
-      }
+      fs.writeFileSync(path.join(workflowsDir, 'workflows.json'), JSON.stringify(workflowData, null, 2), 'utf8');
       
       return { success: true, message: `Deleted workflow: ${name}` };
-    });
-    
-    // Add new IPC handlers for scheduling
-    ipcMain.handle('workflow:schedule', (event, { name, schedule }) => {
-      console.log('IPC: Schedule workflow', name, schedule);
-      const workflowsFile = path.join(workflowsDir, 'workflows.json');
-      let workflows = {};
+    } catch (error) {
+      console.error('Error deleting workflow:', error);
+      return { success: false, message: `Error deleting workflow: ${error.message}` };
+    }
+  });
+  
+  // Add new IPC handlers for scheduling
+  ipcMain.handle('workflow:schedule', (event, { name, schedule }) => {
+    console.log('IPC: Schedule workflow', name, schedule);
+    try {
+      const workflowData = JSON.parse(fs.readFileSync(path.join(workflowsDir, 'workflows.json'), 'utf8')) || {};
       
-      try {
-        if (fs.existsSync(workflowsFile)) {
-          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
-        }
-      } catch (error) {
-        console.error('Error loading workflows:', error);
-        return { success: false, message: 'Error loading workflows' };
-      }
-      
-      if (!workflows[name]) {
+      if (!workflowData[name]) {
         return { success: false, message: `Workflow not found: ${name}` };
       }
       
-      const workflow = workflows[name];
+      const workflow = workflowData[name];
       
       // Add schedule to workflow
       workflow.schedule = schedule;
       
       // Save updated workflow
-      try {
-        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
-      } catch (error) {
-        console.error('Error saving workflow schedule:', error);
-        return { success: false, message: `Error saving schedule: ${error.message}` };
-      }
+      fs.writeFileSync(path.join(workflowsDir, 'workflows.json'), JSON.stringify(workflowData, null, 2), 'utf8');
       
       // Schedule the workflow
       const scheduled = scheduleWorkflow(workflow, schedule);
@@ -543,27 +486,22 @@ const workflows = {
           'Schedule is in the past, not scheduled',
         nextRun: scheduled ? scheduledWorkflows[workflow.id].nextRun : null
       };
-    });
-    
-    ipcMain.handle('workflow:unschedule', (event, name) => {
-      console.log('IPC: Unschedule workflow', name);
-      const workflowsFile = path.join(workflowsDir, 'workflows.json');
-      let workflows = {};
+    } catch (error) {
+      console.error('Error scheduling workflow:', error);
+      return { success: false, message: `Error scheduling workflow: ${error.message}` };
+    }
+  });
+  
+  ipcMain.handle('workflow:unschedule', (event, name) => {
+    console.log('IPC: Unschedule workflow', name);
+    try {
+      const workflowData = JSON.parse(fs.readFileSync(path.join(workflowsDir, 'workflows.json'), 'utf8')) || {};
       
-      try {
-        if (fs.existsSync(workflowsFile)) {
-          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
-        }
-      } catch (error) {
-        console.error('Error loading workflows:', error);
-        return { success: false, message: 'Error loading workflows' };
-      }
-      
-      if (!workflows[name]) {
+      if (!workflowData[name]) {
         return { success: false, message: `Workflow not found: ${name}` };
       }
       
-      const workflow = workflows[name];
+      const workflow = workflowData[name];
       
       // Clear schedule
       if (scheduledWorkflows[workflow.id]) {
@@ -575,38 +513,28 @@ const workflows = {
       delete workflow.schedule;
       
       // Save updated workflow
-      try {
-        fs.writeFileSync(workflowsFile, JSON.stringify(workflows, null, 2), 'utf8');
-      } catch (error) {
-        console.error('Error saving workflow:', error);
-        return { success: false, message: `Error removing schedule: ${error.message}` };
-      }
+      fs.writeFileSync(path.join(workflowsDir, 'workflows.json'), JSON.stringify(workflowData, null, 2), 'utf8');
       
       return { 
         success: true, 
         message: `Removed schedule for workflow: ${name}`
       };
-    });
-    
-    ipcMain.handle('workflow:getSchedule', (event, name) => {
-      console.log('IPC: Get workflow schedule', name);
-      const workflowsFile = path.join(workflowsDir, 'workflows.json');
-      let workflows = {};
+    } catch (error) {
+      console.error('Error unscheduling workflow:', error);
+      return { success: false, message: `Error removing schedule: ${error.message}` };
+    }
+  });
+  
+  ipcMain.handle('workflow:getSchedule', (event, name) => {
+    console.log('IPC: Get workflow schedule', name);
+    try {
+      const workflowData = JSON.parse(fs.readFileSync(path.join(workflowsDir, 'workflows.json'), 'utf8')) || {};
       
-      try {
-        if (fs.existsSync(workflowsFile)) {
-          workflows = JSON.parse(fs.readFileSync(workflowsFile, 'utf8'));
-        }
-      } catch (error) {
-        console.error('Error loading workflows:', error);
-        return { success: false, message: 'Error loading workflows' };
-      }
-      
-      if (!workflows[name]) {
+      if (!workflowData[name]) {
         return { success: false, message: `Workflow not found: ${name}` };
       }
       
-      const workflow = workflows[name];
+      const workflow = workflowData[name];
       const workflowId = workflow.id;
       
       if (!workflow.schedule) {
@@ -619,32 +547,75 @@ const workflows = {
         schedule: workflow.schedule,
         nextRun: scheduledWorkflows[workflowId]?.nextRun
       };
-    });
-    
-    console.log('Workflow system initialized');
-  }
-};
+    } catch (error) {
+      console.error('Error getting workflow schedule:', error);
+      return { success: false, message: `Error getting schedule: ${error.message}` };
+    }
+  });
+  
+  console.log('Workflow system initialized');
+}
+
+// Enable webview support
+app.commandLine.appendSwitch('enable-features', 'WebViewTag');
+
+// Handle creating/removing shortcuts on Windows when installing/uninstalling
+if (require('electron-squirrel-startup')) {
+  app.quit();
+}
 
 app.whenReady().then(async () => {
   createWindow();
   
   // Initialize modules
   const dataDir = path.join(__dirname, 'data');
-  workflows.initialize();
-  formTemplates.initialize(dataDir);
+  // Ensure data directory exists
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+
+  // Initialize modules with proper data directory
+  workflowsModule.initialize(dataDir);
+  const templatesController = formTemplates.initialize(dataDir);
+  
+  // Register the formTemplates:get handler for compatibility with older code
+  ipcMain.handle('formTemplates:get', async () => {
+    console.log('Legacy formTemplates:get handler called');
+    return templatesController.model.getTemplates();
+  });
+  
+  // Also register the new channel name
+  ipcMain.handle('formTemplate:getAll', async () => {
+    console.log('formTemplate:getAll handler called');
+    return templatesController.model.getTemplates();
+  });
   
   // Initialize DeepSeek with local model
   const initialized = await deepseek.initialize();
   if (!initialized) {
-    console.warn('DeepSeek model initialization failed. Some features may be limited.');
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'AI Features Limited',
+      message: 'Some AI features are currently limited',
+      detail: 'To enable all AI features, please:\n1. Make sure Ollama is running\n2. Run the command: ollama pull deepseek-coder:8b\n\nYou can still use the browser normally.'
+    });
   }
   
-  // Initialize R1
-  const r1Initialized = await r1.initialize();
-  if (!r1Initialized) {
-    console.warn('R1 initialization failed. Some AI features may be limited.');
+  // Initialize Gemma
+  const gemmaInitialized = await gemma.initialize().catch(err => {
+    console.warn('Gemma initialization error:', err);
+    return false;
+  });
+  
+  if (!gemmaInitialized) {
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Gemma Features Limited',
+      message: 'Gemma AI features are currently limited',
+      detail: 'To enable Gemma AI features, please:\n1. Make sure Ollama is running\n2. Run the command: ollama pull gemma3:4b\n\nYou can still use the browser normally.'
+    });
   } else {
-    console.log('R1 initialized successfully');
+    console.log('Gemma initialized successfully');
   }
   
   // Create application menu

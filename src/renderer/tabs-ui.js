@@ -15,6 +15,48 @@ console.log('urlBar:', urlBar);
 console.log('webview:', webview);
 console.log('newTabBtn:', newTabBtn);
 
+// Navigation error handling
+const MAX_RETRY_ATTEMPTS = 3;
+const navigationRetryState = {
+  attempts: 0,
+  lastUrl: '',
+  retryTimers: {}
+};
+
+function handleNavigationError(url, error) {
+  console.warn(`Navigation error to ${url}: ${error}`);
+
+  // Check if we're already retrying this URL
+  if (navigationRetryState.lastUrl === url) {
+    navigationRetryState.attempts++;
+    
+    if (navigationRetryState.attempts > MAX_RETRY_ATTEMPTS) {
+      console.error(`Exceeded maximum retry attempts (${MAX_RETRY_ATTEMPTS}) for ${url}`);
+      return false; // Don't retry anymore
+    }
+  } else {
+    // New URL to retry
+    navigationRetryState.lastUrl = url;
+    navigationRetryState.attempts = 1;
+  }
+  
+  // Clear any existing retry timer for this URL
+  if (navigationRetryState.retryTimers[url]) {
+    clearTimeout(navigationRetryState.retryTimers[url]);
+  }
+  
+  // Set a new retry timer
+  const delay = navigationRetryState.attempts * 1000; // Incremental backoff
+  console.log(`Will retry navigation to ${url} in ${delay}ms`);
+  
+  navigationRetryState.retryTimers[url] = setTimeout(() => {
+    console.log(`Retrying navigation to ${url} (attempt ${navigationRetryState.attempts})`);
+    webview.src = url;
+  }, delay);
+  
+  return true; // We're handling the retry
+}
+
 function renderTabs() {
   const tabsList = document.createElement('div');
   window.tabs.forEach(tab => {
@@ -23,8 +65,15 @@ function renderTabs() {
     tabEl.textContent = tab.title;
     tabEl.onclick = () => {
       window.tabs = window.tabs.map(t => ({ ...t, active: t.id === tab.id }));
-      webview.src = tab.url;
-      urlBar.value = tab.url; // Update URL bar when switching tabs
+      
+      try {
+        webview.src = tab.url;
+        urlBar.value = tab.url; // Update URL bar when switching tabs
+      } catch (err) {
+        console.error('Error switching tabs:', err);
+        handleNavigationError(tab.url, err);
+      }
+      
       renderTabs();
     };
     tabsList.appendChild(tabEl);
@@ -87,6 +136,7 @@ if (urlBar) {
         }
       } catch (err) {
         console.error('Error navigating:', err); // Debug
+        handleNavigationError(url, err);
       }
     }
   });
@@ -103,10 +153,18 @@ if (webview) {
   
   webview.addEventListener('did-stop-loading', () => {
     console.log('Webview stopped loading');
+    // Reset navigation retry state when a page successfully loads
+    navigationRetryState.attempts = 0;
   });
   
   webview.addEventListener('did-fail-load', (event) => {
     console.error('Webview failed to load:', event);
+    
+    // Check if it's an ERR_ABORTED error, which is often temporary
+    if (event.errorCode === -3 || event.errorDescription?.includes('ERR_ABORTED')) {
+      const currentUrl = webview.src;
+      handleNavigationError(currentUrl, `ERR_ABORTED (${event.errorCode})`);
+    }
   });
   
   webview.addEventListener('did-finish-load', () => {
