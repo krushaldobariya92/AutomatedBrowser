@@ -88,79 +88,78 @@ class FormTemplateController {
 
   setupIpcHandlers() {
     // Get all templates - support both new and legacy channel names
-    ipcMain.handle('formTemplate:getAll', () => {
+    ipcMain.handle('formTemplate:getAll', async () => {
       console.log('IPC: Get all form templates');
-      return this.model.getTemplates();
+      try {
+        return this.model.getTemplates();
+      } catch (error) {
+        console.error('Error in formTemplate:getAll handler:', error);
+        return { error: error.message || 'Unknown error loading templates' };
+      }
     });
     
     // Legacy handler for backward compatibility
-    ipcMain.handle('formTemplates:get', () => {
+    ipcMain.handle('formTemplates:get', async () => {
       console.log('Legacy IPC: Get all form templates');
-      return this.model.getTemplates();
+      try {
+        return this.model.getTemplates();
+      } catch (error) {
+        console.error('Error in formTemplates:get handler:', error);
+        return { error: error.message || 'Unknown error loading templates' };
+      }
     });
 
     // Get a specific template
-    ipcMain.handle('formTemplate:get', (event, name) => {
+    ipcMain.handle('formTemplate:get', async (event, name) => {
       console.log('IPC: Get form template', name);
-      const template = this.model.getTemplate(name);
-      
-      if (!template) {
-        return { success: false, message: `Template not found: ${name}` };
+      try {
+        const template = this.model.getTemplate(name);
+        
+        if (!template) {
+          return { success: false, message: `Template not found: ${name}` };
+        }
+        
+        return { success: true, template };
+      } catch (error) {
+        console.error(`Error getting template ${name}:`, error);
+        return { success: false, message: error.message || 'Unknown error' };
       }
-      
-      return { success: true, template };
     });
 
     // Save a new template
-    ipcMain.handle('formTemplate:save', (event, { name, fields }) => {
-      console.log('IPC: Save form template', name);
-      
-      if (!name) {
-        return { success: false, message: 'Template name is required' };
+    ipcMain.handle('formTemplate:save', async (event, name, fields) => {
+      console.log('IPC: Save form template', name, fields);
+      try {
+        const success = this.model.saveTemplate(name, fields);
+        return { success };
+      } catch (error) {
+        console.error(`Error saving template ${name}:`, error);
+        return { success: false, message: error.message || 'Unknown error' };
       }
-      
-      if (!fields || !Array.isArray(fields) || fields.length === 0) {
-        return { success: false, message: 'Template must have at least one field' };
-      }
-      
-      const success = this.model.saveTemplate(name, fields);
-      
-      return { 
-        success, 
-        message: success ? `Saved template: ${name}` : 'Error saving template'
-      };
     });
 
     // Update an existing template
-    ipcMain.handle('formTemplate:update', (event, { name, fields }) => {
+    ipcMain.handle('formTemplate:update', async (event, name, fields) => {
       console.log('IPC: Update form template', name);
-      
-      if (!name) {
-        return { success: false, message: 'Template name is required' };
+      try {
+        const success = this.model.updateTemplate(name, fields);
+        return { success };
+      } catch (error) {
+        console.error(`Error updating template ${name}:`, error);
+        return { success: false, message: error.message || 'Unknown error' };
       }
-      
-      if (!fields || !Array.isArray(fields) || fields.length === 0) {
-        return { success: false, message: 'Template must have at least one field' };
-      }
-      
-      const success = this.model.updateTemplate(name, fields);
-      
-      return { 
-        success, 
-        message: success ? `Updated template: ${name}` : `Template not found: ${name}`
-      };
     });
 
     // Delete a template
-    ipcMain.handle('formTemplate:delete', (event, name) => {
+    ipcMain.handle('formTemplate:delete', async (event, name) => {
       console.log('IPC: Delete form template', name);
-      
-      const success = this.model.deleteTemplate(name);
-      
-      return { 
-        success, 
-        message: success ? `Deleted template: ${name}` : `Template not found: ${name}`
-      };
+      try {
+        const success = this.model.deleteTemplate(name);
+        return { success };
+      } catch (error) {
+        console.error(`Error deleting template ${name}:`, error);
+        return { success: false, message: error.message || 'Unknown error' };
+      }
     });
 
     // Apply a template to a form

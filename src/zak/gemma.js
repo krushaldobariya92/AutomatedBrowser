@@ -7,6 +7,11 @@ class GemmaIntegration {
         this.modelName = 'gemma3:4b';
         this.ollamaEndpoint = 'http://localhost:11434';
         this.setupIpcHandlers();
+        this.fallbackResponses = {
+            navigation: "I can help you navigate to that website.",
+            search: "I'll search for that information.",
+            notAvailable: "I'm sorry, I can't process your request right now. The language model service isn't available."
+        };
     }
 
     async checkModelAvailability() {
@@ -14,6 +19,7 @@ class GemmaIntegration {
             // Check if Ollama service is running
             const serviceCheck = await fetch(`${this.ollamaEndpoint}/api/tags`).catch(() => null);
             if (!serviceCheck) {
+                console.warn('Ollama service not available');
                 throw new Error('Ollama service not available. Please start Ollama first.');
             }
 
@@ -26,6 +32,7 @@ class GemmaIntegration {
             );
 
             if (!modelExists) {
+                console.warn(`Model ${this.modelName} not found`);
                 throw new Error(
                     `Model ${this.modelName} not found. Please run the following command first:\n` +
                     `ollama pull ${this.modelName}`
@@ -35,7 +42,7 @@ class GemmaIntegration {
             return true;
         } catch (error) {
             console.error('Model availability check failed:', error);
-            throw error;
+            return false;
         }
     }
 
@@ -43,48 +50,18 @@ class GemmaIntegration {
         if (this.initialized) return true;
 
         try {
-            // Check if Ollama service is running
-            const serviceCheck = await fetch(`${this.ollamaEndpoint}/api/tags`).catch(() => null);
-            if (!serviceCheck) {
-                console.warn('Ollama service not available. Please start Ollama first.');
-                return false;
-            }
-
-            // Check if model is already pulled
-            const response = await fetch(`${this.ollamaEndpoint}/api/tags`);
-            const tags = await response.json();
+            const available = await this.checkModelAvailability();
             
-            const modelExists = tags.models && tags.models.some(model => 
-                model.name === this.modelName
-            );
-
-            if (!modelExists) {
-                console.warn(`Model ${this.modelName} not found. Please run: ollama pull ${this.modelName}`);
+            if (!available) {
+                console.warn('Model not available, Gemma will run in fallback mode');
                 return false;
             }
-
-            // Verify model is working
-            console.log('Verifying Gemma model...');
-            const testResponse = await fetch(`${this.ollamaEndpoint}/api/generate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: this.modelName,
-                    prompt: 'Return "ok" if you can read this.',
-                    stream: false
-                })
-            });
-
-            if (!testResponse.ok) {
-                console.warn('Model verification failed. Some AI features may be limited.');
-                return false;
-            }
-
+            
+            console.log(`Gemma initialized with model: ${this.modelName}`);
             this.initialized = true;
-            console.log('Gemma model initialized successfully');
             return true;
         } catch (error) {
-            console.warn('Error during Gemma initialization:', error);
+            console.error('Failed to initialize Gemma:', error);
             return false;
         }
     }
@@ -115,140 +92,119 @@ class GemmaIntegration {
         if (!this.initialized) {
             const initialized = await this.initialize();
             if (!initialized) {
-                return { success: false, message: 'Gemma not initialized' };
+                console.warn('Gemma not initialized during analyzeForm call');
+                return { 
+                    success: false, 
+                    message: 'Language model service unavailable',
+                    analysis: {
+                        action: 'RESPOND',
+                        response: this.fallbackResponses.notAvailable
+                    }
+                };
             }
         }
 
-        // Check if this is a Zak assistant request
-        const isZakRequest = url && pageContent && pageContent.includes('browser assistant');
-        
-        let prompt;
-        if (isZakRequest) {
-            prompt = pageContent;  // The prompt is passed directly in the pageContent for Zak requests
-        } else {
-            // Original form analysis prompt
-            prompt = `You are an expert in form analysis. Analyze this HTML form and provide a detailed understanding of its structure and purpose.
-
-HTML Content:
-${pageContent}
-
-URL: ${url}
-
-Provide analysis in JSON format:
-{
-    "formPurpose": "detailed description of form's purpose",
-    "fields": [
-        {
-            "name": "field name",
-            "type": "field type",
-            "purpose": "field's purpose",
-            "validation": {
-                "required": boolean,
-                "pattern": "validation pattern if any",
-                "constraints": ["list of constraints"]
-            },
-            "relationships": ["related fields"],
-            "selector": "precise CSS selector",
-            "automationHints": ["suggestions for automation"]
-        }
-    ],
-    "workflow": {
-        "dependencies": ["field dependencies"],
-        "sequence": ["optimal fill sequence"],
-        "validations": ["validation points"]
-    }
-}`;
+        // Truncate page content if it's too large
+        const maxContentLength = 2000;
+        let truncatedContent = pageContent;
+        if (pageContent && pageContent.length > maxContentLength) {
+            console.log(`Truncating page content from ${pageContent.length} to ${maxContentLength} characters`);
+            truncatedContent = pageContent.substring(0, maxContentLength) + '...';
         }
 
         try {
+            console.log(`Analyzing content for URL: ${url}`);
+            
+            // Prepare the prompt with context
+            const prompt = `
+            You are a helpful AI assistant for a browser automation system.
+            ${url ? `The current page URL is: ${url}` : ''}
+            
+            ${truncatedContent ? 'Page content: ' + truncatedContent : 'No page content available'}
+            
+            Analyze this content and respond with a JSON object containing:
+            {
+              "formFields": [
+                {
+                  "name": "field name or id",
+                  "label": "human-readable label",
+                  "type": "text|password|email|checkbox|radio|select",
+                  "options": ["option1", "option2"], // Only for select fields
+                  "required": true|false,
+                  "defaultValue": "any default value"
+                }
+              ],
+              "purpose": "brief description of what this form is for",
+              "action": "what happens when this form is submitted",
+              "suggestions": ["suggestion1", "suggestion2"] // suggestions for automating this form
+            }
+            
+            If no form is present, return:
+            {
+              "formFields": [],
+              "purpose": "no form detected",
+              "suggestions": []
+            }
+            `;
+            
             const response = await fetch(`${this.ollamaEndpoint}/api/generate`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json'
+                },
                 body: JSON.stringify({
                     model: this.modelName,
-                    prompt,
-                    stream: false,
-                    options: {
-                        temperature: 0.1,
-                        num_predict: 2000
-                    }
+                    prompt: prompt,
+                    stream: false
                 })
             });
-
+            
             if (!response.ok) {
-                throw new Error('Failed to get response from Gemma');
+                throw new Error(`API request failed with status: ${response.status}`);
             }
-
+            
             const result = await response.json();
+            const formAnalysis = result.response || '';
             
-            let parsedResponse;
             try {
-                // First, try to directly parse the response
-                parsedResponse = JSON.parse(result.response);
-            } catch (e) {
-                console.warn("Failed to parse direct response as JSON, trying to extract JSON from text");
+                // Extract JSON from the response
+                const jsonRegex = /{[\s\S]*}/;
+                const jsonMatch = formAnalysis.match(jsonRegex);
                 
-                // Try to extract JSON from markdown code blocks if present
-                const jsonRegex = /```(?:json)?\s*(\{[\s\S]*?\})\s*```/;
-                const match = result.response.match(jsonRegex);
-                
-                if (match && match[1]) {
-                    try {
-                        parsedResponse = JSON.parse(match[1]);
-                        console.log("Successfully extracted JSON from code block");
-                    } catch (e2) {
-                        console.warn("Failed to parse extracted JSON:", e2);
-                        
-                        // For Zak requests, create a simple response structure
-                        if (isZakRequest) {
-                            parsedResponse = {
-                                action: "RESPOND",
-                                response: "I couldn't process that request properly. " + 
-                                         "Could you try rephrasing your question?",
-                                explanation: "Could not parse response as JSON"
-                            };
-                        } else {
-                            // For form analysis, return the raw text
-                            return {
-                                success: true,
-                                analysis: {
-                                    formPurpose: "Could not parse form",
-                                    raw: result.response
-                                }
-                            };
-                        }
-                    }
-                } else {
-                    // No JSON found in markdown blocks, create simple response
-                    if (isZakRequest) {
-                        parsedResponse = {
-                            action: "RESPOND",
-                            response: result.response,
-                            explanation: "Could not parse response as JSON"
-                        };
-                    } else {
-                        // For form analysis, return the raw text
-                        return {
-                            success: true,
-                            analysis: {
-                                formPurpose: "Could not parse form",
-                                raw: result.response
-                            }
-                        };
-                    }
+                if (!jsonMatch) {
+                    console.warn('No JSON found in response:', formAnalysis);
+                    return {
+                        success: false,
+                        message: 'Invalid response format from language model',
+                        rawResponse: formAnalysis
+                    };
                 }
+                
+                const parsedAnalysis = JSON.parse(jsonMatch[0]);
+                return {
+                    success: true,
+                    analysis: parsedAnalysis
+                };
+            } catch (parseError) {
+                console.error('Error parsing form analysis:', parseError);
+                console.log('Raw form analysis:', formAnalysis);
+                
+                // Attempt to extract useful information even if JSON parsing fails
+                return {
+                    success: false,
+                    message: 'Failed to parse analysis',
+                    rawResponse: formAnalysis
+                };
             }
-            
-            return {
-                success: true,
-                analysis: parsedResponse
-            };
         } catch (error) {
-            console.error('Error in form analysis:', error);
+            console.error('Error analyzing form:', error);
             return {
                 success: false,
-                message: 'Form analysis failed',
-                error: error.message
+                message: error.message,
+                analysis: {
+                    action: 'RESPOND',
+                    response: 'Sorry, I had trouble analyzing this page. Could you try again?'
+                }
             };
         }
     }
