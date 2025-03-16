@@ -4,6 +4,10 @@ const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
 const url = require('url');
+const formTemplates = require('./src/main/form-templates');
+const deepseek = require('./src/main/deepseek-local');
+const workflows = require('./src/main/workflows');
+const r1 = require('./src/zak/r1');
 
 // Global reference to the main window
 let win;
@@ -14,8 +18,9 @@ function createWindow() {
     width: 1200,
     height: 800,
     webPreferences: { 
-      nodeIntegration: true, 
-      contextIsolation: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'src/renderer/main-preload.js'),
       webviewTag: true, // Enable webview tag
       webSecurity: false, // Disable web security for development
       allowRunningInsecureContent: true, // Allow running insecure content
@@ -146,9 +151,6 @@ try {
 } catch (error) {
   console.error('Error importing workflows module:', error);
 }
-
-// Import custom modules
-const formTemplates = require('./src/main/form-templates');
 
 // Enable webview support
 app.commandLine.appendSwitch('enable-features', 'WebViewTag');
@@ -630,6 +632,20 @@ app.whenReady().then(async () => {
   const dataDir = path.join(__dirname, 'data');
   workflows.initialize();
   formTemplates.initialize(dataDir);
+  
+  // Initialize DeepSeek with local model
+  const initialized = await deepseek.initialize();
+  if (!initialized) {
+    console.warn('DeepSeek model initialization failed. Some features may be limited.');
+  }
+  
+  // Initialize R1
+  const r1Initialized = await r1.initialize();
+  if (!r1Initialized) {
+    console.warn('R1 initialization failed. Some AI features may be limited.');
+  } else {
+    console.log('R1 initialized successfully');
+  }
   
   // Create application menu
   createMenu();

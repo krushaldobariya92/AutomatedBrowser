@@ -462,28 +462,51 @@ class FormTemplatesPresenter {
     const currentUrl = await getCurrentUrl();
     
     try {
-      const result = await formTemplatesIpcRenderer.invoke('formTemplate:apply', { name, url: currentUrl });
+      // Get page content for context
+      const webview = document.querySelector('webview.active');
+      if (!webview) {
+        this.updateStatus('No active webview found');
+        return;
+      }
+      
+      const pageContent = await webview.executeJavaScript(`
+        document.documentElement.outerHTML
+      `);
+      
+      // Send to DeepSeek R1 for intelligent form filling
+      const result = await formTemplatesIpcRenderer.invoke('deepseek:fillForm', {
+        template: this.selectedTemplate,
+        pageContent,
+        url: currentUrl
+      });
       
       if (result.success) {
-        this.updateStatus(result.message);
-        
-        // Apply template to current page
-        const template = result.template;
-        
-        // Send to active webview
-        const webview = document.querySelector('webview.active');
-        if (webview) {
-          webview.send('apply-form-template', template);
-          this.updateStatus(`Applied template "${name}" to current page`);
-        } else {
-          this.updateStatus('No active webview found');
+        // Apply the intelligent field mappings
+        for (const action of result.actions) {
+          await webview.executeJavaScript(`
+            (function() {
+              try {
+                const element = document.querySelector('${action.selector}');
+                if (!element) return false;
+                
+                ${action.script}
+                
+                return true;
+              } catch (error) {
+                console.error('Error executing form action:', error);
+                return false;
+              }
+            })()
+          `);
         }
+        
+        this.updateStatus(`Applied template "${name}" intelligently to current page`);
       } else {
-        this.updateStatus(result.message);
+        this.updateStatus(result.message || 'Error applying template');
       }
     } catch (error) {
       console.error('Error applying template:', error);
-      this.updateStatus('Error applying template');
+      this.updateStatus('Error applying template with DeepSeek R1');
     }
   }
   
@@ -495,42 +518,48 @@ class FormTemplatesPresenter {
       return;
     }
     
-    // Request form capture from webview
-    webview.send('capture-form');
-    
-    // Listen for response
-    webview.addEventListener('ipc-message', async (event) => {
-      if (event.channel === 'form-captured') {
-        const formData = event.args[0];
-        console.log('Form captured:', formData);
-        
-        if (!formData || !formData.fields || formData.fields.length === 0) {
-          this.updateStatus('No form fields found on the page');
-          return;
-        }
-        
-        // Create new template with captured fields
+    try {
+      // Get page content for DeepSeek R1 analysis
+      const pageContent = await webview.executeJavaScript(`
+        document.documentElement.outerHTML
+      `);
+      
+      // Send to DeepSeek R1 for form analysis
+      const result = await formTemplatesIpcRenderer.invoke('deepseek:analyzeForm', {
+        pageContent,
+        url: await getCurrentUrl()
+      });
+      
+      if (result.success && result.fields) {
+        // Create new template with analyzed fields
         this.createNewTemplate();
         
-        // Set template name based on page title
-        const pageTitle = await getPageTitle();
-        this.templateNameInput.value = `Form - ${pageTitle}`;
+        // Set template name based on DeepSeek's analysis
+        this.templateNameInput.value = result.suggestedName || `Form - ${await getPageTitle()}`;
         
         // Clear existing fields
         this.templateFieldsContainer.innerHTML = '';
         
-        // Add captured fields
-        formData.fields.forEach((field, index) => {
+        // Add analyzed fields
+        result.fields.forEach((field, index) => {
           this.addFieldToUI({
-            name: field.name || `field_${index + 1}`,
+            name: field.name,
             selector: field.selector,
-            value: field.value || ''
+            value: field.defaultValue || '',
+            type: field.type,
+            validation: field.validation,
+            description: field.description
           }, index);
         });
         
-        this.updateStatus('Form captured successfully');
+        this.updateStatus('Form analyzed successfully by DeepSeek R1');
+      } else {
+        this.updateStatus('No form fields found or analysis failed');
       }
-    }, { once: true });
+    } catch (error) {
+      console.error('Error analyzing form:', error);
+      this.updateStatus('Error analyzing form with DeepSeek R1');
+    }
   }
   
   showTemplatePanel() {
@@ -586,7 +615,7 @@ async function getPageTitle() {
   }
 }
 
-// Create and export singleton instance
+// Create singleton instance
 const formTemplatesPresenter = new FormTemplatesPresenter();
 
 // Initialize when DOM is ready
@@ -594,5 +623,5 @@ document.addEventListener('DOMContentLoaded', () => {
   formTemplatesPresenter.initialize();
 });
 
-// Export the module
-module.exports = formTemplatesPresenter; 
+// Expose presenter globally for other scripts
+window.formTemplatesPresenter = formTemplatesPresenter; 

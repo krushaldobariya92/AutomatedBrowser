@@ -1,5 +1,23 @@
 // workflows-ui.js - Manages the UI for workflow recording and playback
-const { ipcRenderer } = require('electron');
+let ipcRenderer;
+if (typeof window !== 'undefined' && window.electron) {
+  ipcRenderer = window.electron.ipcRenderer;
+} else {
+  console.warn('window.electron not found, some features may not work');
+  // Create mock ipcRenderer for development/testing
+  ipcRenderer = {
+    invoke: (channel, ...args) => {
+      console.log(`Mock ipcRenderer.invoke called: ${channel}`, args);
+      return Promise.resolve({});
+    },
+    send: (channel, ...args) => {
+      console.log(`Mock ipcRenderer.send called: ${channel}`, args);
+    },
+    on: (channel, func) => {
+      console.log(`Mock ipcRenderer.on called: ${channel}`);
+    }
+  };
+}
 
 // UI elements
 let workflowPanelElement;
